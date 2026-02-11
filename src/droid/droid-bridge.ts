@@ -29,12 +29,25 @@ export interface DroidStreamEvent {
   data: any;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────
+/**
+ * Expands a leading tilde in a filesystem path to the current user's home directory.
+ *
+ * @param p - The path string that may start with `~`
+ * @returns The input path with a leading `~` replaced by the user's home directory, or the original path if it does not start with `~`
+ */
 
 function expandTilde(p: string): string {
   return p.startsWith('~') ? p.replace('~', homedir()) : p;
 }
 
+/**
+ * Locate the Droid executable on the local system.
+ *
+ * Checks common install locations and the configured `DROID_EXEC_PATH`; returns the first path that exists.
+ *
+ * @returns The filesystem path to the Droid executable.
+ * @throws Error if no executable is found. 
+ */
 function resolveDroidBinary(): string {
   // Look for `droid` binary (not the wrapper)
   const candidates = [
@@ -50,6 +63,16 @@ function resolveDroidBinary(): string {
   throw new Error('droid binary not found. Install Factory Droid or update DROID_EXEC_PATH.');
 }
 
+/**
+ * Build the command-line arguments for invoking the `droid exec` command.
+ *
+ * Constructs an argument list that sets the output format, auto level, model, optional session and working directory, and includes the prompt. If `opts.useSpec` points to an existing file, its contents are prepended to the prompt (separated by two newlines).
+ *
+ * @param prompt - The user prompt to send to the droid process (or appended after spec content when present)
+ * @param outputMode - The output format flag (`'json'` or `'stream-json'`) to set via `--output-format`
+ * @param opts - Options controlling model selection, auto level, session id, working directory, and optional spec file path
+ * @returns The array of CLI arguments to pass to the `droid` executable (suitable for spawn)
+ */
 function buildArgs(prompt: string, outputMode: 'json' | 'stream-json', opts: DroidOptions): string[] {
   // Call `droid exec` directly (not the wrapper) so we can pass --output-format
   const args: string[] = ['exec'];
@@ -87,6 +110,15 @@ function buildArgs(prompt: string, outputMode: 'json' | 'stream-json', opts: Dro
   return args;
 }
 
+/**
+ * Start the Droid executable as a child process with piped stdio and an enforced timeout.
+ *
+ * @param args - Command-line arguments to pass to the Droid binary
+ * @param timeoutMs - Maximum runtime in milliseconds before the process is terminated
+ * @returns An object with:
+ *  - `proc`: the spawned ChildProcess
+ *  - `kill`: a function that clears the internal timeout and attempts to terminate the process (sends `SIGTERM`, then `SIGKILL` if the process remains after ~5 seconds)
+ */
 function spawnDroid(args: string[], timeoutMs: number): { proc: ChildProcess; kill: () => void } {
   const droidBin = resolveDroidBinary();
   console.log(`[Droid] Spawning: ${droidBin} ${args.slice(0, 4).join(' ')} ... (timeout ${timeoutMs}ms)`);
@@ -114,7 +146,15 @@ function spawnDroid(args: string[], timeoutMs: number): { proc: ChildProcess; ki
   return { proc, kill };
 }
 
-// ── JSON mode (single result) ────────────────────────────────────────
+/**
+ * Executes the Droid CLI with the given prompt and returns its single structured result.
+ *
+ * Executes droid in JSON mode (when supported), collects stdout/stderr, parses JSON output into a DroidResult, and emits lifecycle events (`droid:start`, `droid:complete`). Rejects the promise if the process fails to spawn or if no output is produced.
+ *
+ * @param prompt - The text prompt to send to the droid executable
+ * @param opts - Optional execution settings (model, auto level, cwd, sessionId, useSpec, timeoutMs)
+ * @returns A DroidResult containing `result`, optional `sessionId`, `durationMs`, `isError`, and optional `numTurns`
+ */
 
 export async function execDroidJSON(prompt: string, opts: DroidOptions = {}): Promise<DroidResult> {
   const timeoutMs = opts.timeoutMs ?? config.DROID_TIMEOUT_MS;

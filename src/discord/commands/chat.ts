@@ -14,6 +14,12 @@ import {
 } from '../../claude/request-queue.js';
 import { sendCompactionNotice, sendSessionInitNotice } from '../compaction-notice.js';
 
+/**
+ * Streams an agent response for a user message into the specified stream, updating progress and tool-operation indicators, then posts compaction and session-initialization notices.
+ *
+ * @param channel - Discord channel object used to post compaction and session-init notices
+ * @param previousSessionId - Previous session id to include in the session-init notice, if present
+ */
 async function streamResponse(
   chatId: number,
   channelId: string,
@@ -50,6 +56,16 @@ async function streamResponse(
   }
 }
 
+/**
+ * Handle the `/chat` command by validating the user's session and streaming the agent's response.
+ *
+ * If the user has no active project session, replies ephemerally with instructions to set one.
+ * If the command is issued inside a thread, streams the agent response inline in that thread.
+ * If issued in a channel, creates a new thread, posts an initial "Processing" message, and streams the response into the new thread.
+ * The user's previous session identifier (if any) is preserved to maintain conversation continuity, and the request is queued for serialized processing.
+ *
+ * @param interaction - The incoming ChatInputCommandInteraction for the `/chat` command
+ */
 export async function handleChat(interaction: ChatInputCommandInteraction): Promise<void> {
   const message = interaction.options.getString('message', true);
 

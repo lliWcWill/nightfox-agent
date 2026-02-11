@@ -5,6 +5,12 @@ import type { GeminiTool, VoiceToolContext } from './gemini-live.js';
 
 // Lazily-initialized GoogleGenAI client for tools that call the text API.
 let cachedTextAI: GoogleGenAI | null = null;
+/**
+ * Return a shared GoogleGenAI client, initializing it on first use.
+ *
+ * @returns A cached `GoogleGenAI` client instance
+ * @throws If `GEMINI_API_KEY` is not configured in `config`
+ */
 function getTextAI(): GoogleGenAI {
   if (!cachedTextAI) {
     if (!config.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
@@ -15,7 +21,12 @@ function getTextAI(): GoogleGenAI {
 
 const RESEARCH_TIMEOUT_MS = 30_000;
 
-/** Check if channel is sendable (text channel or thread) */
+/**
+ * Determine whether a Discord channel is a text-based channel (text channel or thread).
+ *
+ * @param channel - The channel object to test; may be any value.
+ * @returns `true` if `channel` is a `GuildText`, `PublicThread`, `PrivateThread`, or `AnnouncementThread`, `false` otherwise.
+ */
 function isTextBasedChannel(channel: any): channel is TextChannel | ThreadChannel {
   return channel && (
     channel.type === ChannelType.GuildText ||
@@ -26,8 +37,13 @@ function isTextBasedChannel(channel: any): channel is TextChannel | ThreadChanne
 }
 
 /**
- * Creates Discord-aware voice tools that require access to the Discord client
- * and guild/channel context. These are instantiated per voice session.
+ * Create Discord-aware voice tools for a voice session based on the provided context.
+ *
+ * Tools are scoped to the supplied VoiceToolContext and may include chat reading, message sending,
+ * voice member removal, and web research capabilities depending on available context fields.
+ *
+ * @param ctx - Voice session context containing the Discord client, `guildId`, `channelId`, and optional `textChannelId`
+ * @returns An array of `GeminiTool` objects configured for the given voice session context
  */
 export function createDiscordVoiceTools(ctx: VoiceToolContext): GeminiTool[] {
   const tools: GeminiTool[] = [];

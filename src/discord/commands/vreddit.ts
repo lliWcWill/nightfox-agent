@@ -6,6 +6,11 @@ import * as fs from 'fs';
 import { downloadRedditVideo } from '../../reddit/vreddit.js';
 import { discordConfig } from '../discord-config.js';
 
+/**
+ * Handle a slash command that downloads a Reddit video from the provided URL and posts it to Discord.
+ *
+ * Downloads the Reddit video specified by the interaction's `url` option, updates the interaction with progress messages, and attempts to deliver the downloaded file by editing the deferred reply. If the attachment is too large, it falls back to sending a follow-up and, if necessary, sends the file directly to the channel. Temporary download artifacts are removed after completion, and a generic error message is written to the reply when possible on failure.
+ */
 export async function handleVReddit(interaction: ChatInputCommandInteraction): Promise<void> {
   const url = interaction.options.getString('url', true);
 

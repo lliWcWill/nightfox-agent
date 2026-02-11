@@ -209,6 +209,14 @@ const commands = [
     .setType(ApplicationCommandType.Message),
 ];
 
+/**
+ * Register the prepared Discord application commands using the configured application (and optional guild) settings.
+ *
+ * When a guild ID is configured, commands are registered for that guild; otherwise commands are registered globally.
+ * Logs the count of registered commands on success and rethrows any error encountered during registration.
+ *
+ * @throws The underlying error if command registration fails
+ */
 export async function registerCommands(): Promise<void> {
   const rest = new REST({ version: '10' }).setToken(discordConfig.DISCORD_BOT_TOKEN);
 

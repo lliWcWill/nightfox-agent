@@ -4,6 +4,15 @@ import { sessionManager } from '../../claude/session-manager.js';
 import { getModel, getCachedUsage, isDangerousMode } from '../../claude/agent.js';
 import { isProcessing } from '../../claude/request-queue.js';
 
+/**
+ * Sends a concise status summary of the bot and the user's current session to the invoking Discord interaction.
+ *
+ * The reply includes the project path, active model, processing state, dangerous mode flag, optional Claude session ID,
+ * and—when available—usage metrics (total/context tokens with percentage, cost, and turns). If no session exists, a
+ * short instruction for starting a project is returned. The reply is sent as an ephemeral message to the command caller.
+ *
+ * @param interaction - The Discord ChatInputCommandInteraction that triggered the status command
+ */
 export async function handleStatus(interaction: ChatInputCommandInteraction): Promise<void> {
   const chatId = discordChatId(interaction.user.id);
 

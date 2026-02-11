@@ -83,7 +83,15 @@ Be natural, use casual language, and match the energy of the conversation.
 You can sense tone and emotion — adapt your responses accordingly.
 In group conversations, only speak when addressed or when you have something genuinely useful to add.`;
 
-// ── Session factory ──────────────────────────────────────────────────
+/**
+ * Create and open a live Gemini session configured for audio interactions and optional tool integration.
+ *
+ * @param callbacks - Callback handlers for receiving audio, text, session lifecycle events, and errors
+ * @param tools - Optional list of tools Gemini may invoke; each tool is registered for function-calling
+ * @param guildId - Optional Discord guild identifier used when emitting tool-call events
+ * @returns A `GeminiLiveSession` object for sending text and audio, signalling activity start/end, closing the session, and checking open state
+ * @throws Error if `GEMINI_API_KEY` is not configured
+ */
 
 export async function createGeminiLiveSession(
   callbacks: GeminiLiveCallbacks,
@@ -252,7 +260,16 @@ export async function createGeminiLiveSession(
   return liveSession;
 }
 
-// ── Tool call handler ────────────────────────────────────────────────
+/**
+ * Process a provider-initiated tool call, execute matching local tools, and send back function responses to the Gemini session.
+ *
+ * Executes each function call in `toolCall.functionCalls` by looking up the tool in `toolMap`, running its `execute` method when present, and collecting results or errors. Emits a voice:tool_call event with the provided `guildId` for each call. For tools handled by the provider (e.g., `googleSearch`) no client-side response is sent. Any collected function responses are delivered to the Gemini session via its `sendToolResponse` method.
+ *
+ * @param session - The active Gemini session object (must support `sendToolResponse`)
+ * @param toolCall - Object containing one or more `functionCalls` produced by the model
+ * @param toolMap - Map of tool names to `GeminiTool` implementations available for execution
+ * @param guildId - Optional Discord guild identifier used when emitting tool-call events
+ */
 
 async function handleToolCall(
   session: any,

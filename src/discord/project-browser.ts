@@ -20,10 +20,21 @@ export interface BrowserState {
   page: number;
 }
 
+/**
+ * Determine the absolute filesystem root directory used by the project browser.
+ *
+ * @returns The resolved absolute root path for the browser. Prefers the `HOME` environment variable, falls back to `config.WORKSPACE_DIR`, and finally to the current working directory.
+ */
 export function getBrowserRoot(): string {
   return path.resolve(process.env.HOME || config.WORKSPACE_DIR || process.cwd());
 }
 
+/**
+ * Get a sorted list of visible subdirectory names in a directory.
+ *
+ * @param dir - Path of the directory to read
+ * @returns An array of subdirectory names sorted alphabetically; returns an empty array if the directory can't be read or no visible subdirectories exist
+ */
 export function listDirectories(dir: string): string[] {
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -36,16 +47,37 @@ export function listDirectories(dir: string): string[] {
   }
 }
 
+/**
+ * Truncates a label to a maximum length, appending an ellipsis when truncated.
+ *
+ * @param name - The label to shorten
+ * @param max - Maximum allowed length of the returned string
+ * @returns The original `name` if its length is less than or equal to `max`, otherwise the leading characters truncated to `max - 1` plus a single-character ellipsis (`…`)
+ */
 export function shortenLabel(name: string, max = 25): string {
   if (name.length <= max) return name;
   return name.slice(0, max - 1) + '\u2026';
 }
 
+/**
+ * Produces a path string no longer than `max` characters by preserving the trailing portion and prefixing an ellipsis when truncation is needed.
+ *
+ * @param fullPath - The original path string to shorten
+ * @param max - Maximum allowed length of the result, including the leading ellipsis when truncation occurs
+ * @returns The original `fullPath` if its length is less than or equal to `max`, otherwise a string starting with the Unicode ellipsis character (`…`) followed by the last `max - 1` characters of `fullPath`
+ */
 export function shortenDescription(fullPath: string, max = 100): string {
   if (fullPath.length <= max) return fullPath;
   return '\u2026' + fullPath.slice(fullPath.length - (max - 1));
 }
 
+/**
+ * Determine whether a target path is the same as or is located inside a root directory.
+ *
+ * @param root - The root directory to test against
+ * @param target - The path to check for containment within `root`
+ * @returns `true` if the resolved `target` equals `root` or is a descendant of `root`, `false` otherwise
+ */
 export function isWithinRoot(root: string, target: string): boolean {
   const r = path.resolve(root);
   const t = path.resolve(target);
@@ -53,9 +85,11 @@ export function isWithinRoot(root: string, target: string): boolean {
 }
 
 /**
- * Build the interactive directory browser UI components.
- * @param state  Current browser state
- * @param prefix Custom ID prefix for component IDs (default: 'project')
+ * Construct the directory browser message content and Discord UI components for the given browser state.
+ *
+ * @param state - Current browser state (root, current path, and page index); `state.page` will be normalized to valid bounds.
+ * @param prefix - Custom ID prefix for component custom IDs (defaults to 'project')
+ * @returns An object with `content` — a header and instructions describing the current location and folder summary — and `components` — an array of ActionRowBuilder items containing the select menu and navigation/pagination buttons for the browser UI.
  */
 export function buildBrowserUI(
   state: BrowserState,
@@ -161,7 +195,13 @@ export function buildBrowserUI(
   return { content, components };
 }
 
-/** Set project directory for a chat and return a confirmation message. */
+/**
+ * Set the working directory for a chat and clear its conversation context.
+ *
+ * @param chatId - Identifier of the chat whose project should be set
+ * @param dirPath - Absolute path of the directory to use as the project root
+ * @returns A confirmation message containing the project name, its path, and a short usage hint
+ */
 export function setProject(chatId: number, dirPath: string): string {
   sessionManager.setWorkingDirectory(chatId, dirPath);
   clearConversation(chatId);

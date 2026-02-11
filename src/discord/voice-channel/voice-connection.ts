@@ -31,6 +31,12 @@ const prism = require('prism-media');
 // Without this, there's a race condition where the DAVE protocol check
 // throws an uncaught exception because the async import hasn't resolved yet.
 let daveyWarmed = false;
+/**
+ * Preloads the @snazzah/davey DAVE protocol library to avoid race conditions with Discord voice.
+ *
+ * If the library is not already loaded, imports it, yields briefly to allow Discord voice internals
+ * to settle, marks the library as warmed, and logs success; logs a warning on failure.
+ */
 async function warmDavey(): Promise<void> {
   if (daveyWarmed) return;
   try {
@@ -74,18 +80,35 @@ const MAX_RECONNECTS = 3;
 const RECONNECT_DELAY_MS = 2000;
 const reconnectAttempts = new Map<string, number>();
 
-// ── Public API ───────────────────────────────────────────────────────
+/**
+ * Retrieve the active voice session state for a given guild.
+ *
+ * @param guildId - The guild's ID
+ * @returns The `VoiceSessionState` for `guildId` if a session exists, `undefined` otherwise
+ */
 
 export function getVoiceSession(guildId: string): VoiceSessionState | undefined {
   return sessions.get(guildId);
 }
 
+/**
+ * Checks whether there is an active voice session for the given guild.
+ *
+ * @param guildId - The Discord guild (server) identifier to check
+ * @returns `true` if an active session exists for the guild, `false` otherwise
+ */
 export function isInVoiceChannel(guildId: string): boolean {
   return sessions.has(guildId);
 }
 
 /**
- * Join a Discord voice channel and establish a Gemini Live session.
+ * Joins the given Discord voice channel, starts the playback and receive audio pipelines, and establishes a Gemini Live session for that guild.
+ *
+ * @param channel - The Discord voice channel to join.
+ * @param opts - Optional parameters.
+ * @param opts.textChannelId - ID of a text channel to associate with the session.
+ * @param opts.onTextMessage - Callback invoked when the Gemini session emits text messages for the session.
+ * @returns The active VoiceSessionState for the guild.
  */
 export async function joinAndConnect(
   channel: VoiceBasedChannel,
@@ -230,7 +253,13 @@ export async function joinAndConnect(
 }
 
 /**
- * Send a text prompt to Gemini Live (it responds with audio in the VC).
+ * Send a text prompt to the guild's open Gemini Live session.
+ *
+ * If there is no active or open Gemini session for the guild, the prompt is not sent.
+ *
+ * @param guildId - The Discord guild (server) ID to target
+ * @param text - The text prompt to deliver to Gemini Live
+ * @returns `true` if the prompt was sent to an open Gemini session, `false` otherwise
  */
 export function sendTextToGemini(guildId: string, text: string): boolean {
   const state = sessions.get(guildId);
@@ -240,7 +269,9 @@ export function sendTextToGemini(guildId: string, text: string): boolean {
 }
 
 /**
- * Disconnect from voice and close the Gemini session.
+ * Tear down and disconnect the voice session for a guild, closing its Gemini session.
+ *
+ * @param guildId - The Discord guild ID whose voice session should be disconnected
  */
 export async function disconnect(guildId: string): Promise<void> {
   const state = sessions.get(guildId);
@@ -255,7 +286,7 @@ export async function disconnect(guildId: string): Promise<void> {
 }
 
 /**
- * Disconnect all active voice sessions. Used for graceful shutdown.
+ * Disconnects all active voice sessions and waits for each to finish disconnecting.
  */
 export async function disconnectAll(): Promise<void> {
   const guildIds = [...sessions.keys()];
@@ -263,7 +294,16 @@ export async function disconnectAll(): Promise<void> {
   await Promise.all(guildIds.map((guildId) => disconnect(guildId)));
 }
 
-// ── Gemini session factory (used for initial connect + reconnect) ────
+/**
+ * Create and configure a Gemini Live session wired to the guild's playback and receive pipelines.
+ *
+ * Builds a composite toolset (voice, Discord, and agent tools), attaches real-time callbacks for incoming
+ * audio, interruptions, turn completion, lifecycle events, and text messages, and returns the configured session.
+ *
+ * @param ctx - Playback context containing the resampler and audio chunk counter used to feed Discord playback
+ * @param voiceCtx - Optional initial voice context containing channelId and optional textChannelId; used when called before the session state is populated
+ * @returns The configured GeminiLiveSession for the specified guild
+ */
 
 async function connectGeminiSession(
   guildId: string,
@@ -372,7 +412,15 @@ async function connectGeminiSession(
   }, allTools, guildId);
 }
 
-// ── Gemini auto-reconnect ────────────────────────────────────────────
+/**
+ * Attempts to re-establish the Gemini Live session for a guild, with a bounded linear backoff and retry limit.
+ *
+ * If a session exists for the given guild, this function will try to reconnect Gemini, reset the playback pipeline to a clean state, and replace the session's Gemini instance when successful. If the maximum number of reconnect attempts is exceeded, it notifies the guild via the session's `onTextMessage` handler and stops retrying. The operation is no-op if the guild session is torn down during the process.
+ *
+ * @param guildId - The guild identifier whose Gemini session should be reconnected
+ * @param player - The audio player associated with the guild's voice session; used to replay the playback resampler output
+ * @param ctx - The playback context containing the current resampler and audio chunk counter; the resampler will be reset when reconnecting
+ */
 
 async function attemptGeminiReconnect(
   guildId: string,
@@ -430,7 +478,14 @@ async function attemptGeminiReconnect(
   }
 }
 
-// ── User receive subscription ────────────────────────────────────────
+/**
+ * Subscribe to a user's Discord Opus voice stream, decode it to 48 kHz stereo PCM, and forward audio chunks to the session's Gemini Live connection.
+ *
+ * This creates (or reuses) a per-user Opus subscription and a persistent receive resampler. The resampler is kept alive across subscription cycles so ffmpeg is not respawned on every reconnect; decoded PCM is written into the resampler and sent to Gemini while the session is open.
+ *
+ * @param state - The guild's VoiceSessionState containing the voice connection, Gemini session, and resampler/subscription maps
+ * @param userId - The Discord user ID whose audio should be subscribed to and forwarded
+ */
 
 function subscribeToUser(state: VoiceSessionState, userId: string): void {
   // If the existing opus subscription is still healthy, nothing to do
@@ -503,7 +558,15 @@ function subscribeToUser(state: VoiceSessionState, userId: string): void {
   });
 }
 
-// ── Cleanup ──────────────────────────────────────────────────────────
+/**
+ * Tears down and removes the voice session for the given guild.
+ *
+ * If no session exists for the guild, this is a no-op. For an existing session it:
+ * closes the Gemini session, clears the end-debounce timer, removes the session
+ * from the internal map, kills the playback resampler and all per-user receive
+ * resamplers, destroys and clears all user subscriptions, stops the audio player,
+ * and logs the cleanup.
+ */
 
 function cleanupSession(guildId: string): void {
   const state = sessions.get(guildId);

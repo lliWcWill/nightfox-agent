@@ -17,6 +17,17 @@ export interface Resampler {
   alive: boolean;
 }
 
+/**
+ * Create a resampler that converts 24 kHz mono s16le PCM (Gemini) to 48 kHz stereo s16le PCM (Discord) using an ffmpeg subprocess.
+ *
+ * The returned object exposes input and output PassThrough streams for piping audio, a `kill` function to terminate ffmpeg and clean up streams, and an `alive` getter that reflects whether the ffmpeg process is running. If ffmpeg fails or exits, `alive` becomes `false` and the output stream is ended or destroyed.
+ *
+ * @returns A Resampler with:
+ *  - `input`: PassThrough to receive 24 kHz mono s16le PCM,
+ *  - `output`: PassThrough that emits 48 kHz stereo s16le PCM,
+ *  - `kill()`: function that forcefully terminates the ffmpeg process and destroys streams,
+ *  - `alive`: boolean indicating whether the ffmpeg subprocess is currently alive.
+ */
 export function createPlaybackResampler(): Resampler {
   const input = new PassThrough();
   const output = new PassThrough();
@@ -79,6 +90,17 @@ export interface ReceiveResampler {
   alive: boolean;
 }
 
+/**
+ * Create a resampler that converts 48 kHz stereo s16le PCM (Discord) to 16 kHz mono s16le PCM (Gemini).
+ *
+ * The returned object exposes an `input` stream to receive 48 kHz stereo s16le PCM, an `output` stream that emits 16 kHz mono s16le PCM, a `kill()` function to terminate the underlying ffmpeg process and clean up streams, and an `alive` getter that reflects whether the ffmpeg process is currently running.
+ *
+ * @returns A ReceiveResampler with:
+ * - `input`: a PassThrough to write 48 kHz stereo s16le PCM into the resampler
+ * - `output`: a PassThrough that emits 16 kHz mono s16le PCM from the resampler
+ * - `kill()`: a function that forcefully stops the resampler and destroys streams
+ * - `alive`: a boolean getter indicating whether the underlying ffmpeg process is alive
+ */
 export function createReceiveResampler(): ReceiveResampler {
   const input = new PassThrough();
   const output = new PassThrough();

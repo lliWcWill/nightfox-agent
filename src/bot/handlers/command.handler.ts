@@ -2515,6 +2515,15 @@ export async function handleExtract(ctx: Context): Promise<void> {
   await showExtractMenu(ctx, args);
 }
 
+/**
+ * Present an extraction options menu for a media URL and cache the URL for subsequent callback handling.
+ *
+ * Validates the supplied URL and platform; if valid, stores the URL for the chat and sends an inline keyboard
+ * offering Text, Audio, Video, All, and All + Chat extraction options. Sends user-facing errors for invalid
+ * URLs or unsupported platforms.
+ *
+ * @param url - The media URL to validate and present extraction options for
+ */
 export async function showExtractMenu(ctx: Context, url: string): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
@@ -2564,6 +2573,13 @@ export async function showExtractMenu(ctx: Context, url: string): Promise<void> 
   );
 }
 
+/**
+ * Handle an inline callback from the extract flow, routing user selections to the appropriate extraction action.
+ *
+ * Processes callback data for extraction modes and subtitle-format choices, validates session state, clears pending URL state, removes the inline menu, and invokes the extraction pipeline (including the new `all_chat` mode).
+ *
+ * @param ctx - Telegram callback context containing the callback query and chat information
+ */
 export async function handleExtractCallback(ctx: Context): Promise<void> {
   const data = ctx.callbackQuery?.data;
   const chatId = ctx.chat?.id;
@@ -2672,6 +2688,16 @@ export async function handleExtractCallback(ctx: Context): Promise<void> {
   await executeExtract(ctx, url, mode);
 }
 
+/**
+ * Extracts media or text from a URL, delivers extracted artifacts to the chat, and optionally injects the transcript into the active project conversation.
+ *
+ * Performs the extraction with progress updates, sends video/audio/subtitle/transcript outputs (as messages or attachments), posts warning messages, and cleans up temporary files. When `mode` is `'all_chat'` the function will, after delivering files, attempt to stream the transcript and context into the active project session's agent; if no project session exists the user is informed. Errors are reported back to the chat and internal extraction artifacts are removed on completion.
+ *
+ * @param ctx - Telegram context used to send messages and edit the in-chat acknowledgement
+ * @param url - The remote resource URL to extract from
+ * @param mode - Extraction mode; one of `'text'`, `'audio'`, `'video'`, `'all'`, or `'all_chat'` (the last option also sends the transcript/context to the active project agent)
+ * @param subtitleFormat - Optional subtitle output format to request (`'srt'` or `'vtt'`), when applicable
+ */
 export async function executeExtract(ctx: Context, url: string, mode: ExtractMode, subtitleFormat?: SubtitleFormat): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;

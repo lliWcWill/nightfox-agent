@@ -15,7 +15,11 @@ export interface TranscribeOptions {
 }
 
 /**
- * Build the FormData for a Groq Whisper transcription request.
+ * Constructs the FormData payload for a Groq Whisper transcription request.
+ *
+ * @param fileBuffer - The audio file contents as a Buffer to be uploaded
+ * @param fileName - The filename to send for the uploaded audio file
+ * @returns A FormData instance containing the `file`, `model`, `language`, and `response_format` fields required by the Whisper API
  */
 function buildFormData(fileBuffer: Buffer, fileName: string): FormData {
   const formData = new FormData();
@@ -27,9 +31,16 @@ function buildFormData(fileBuffer: Buffer, fileName: string): FormData {
 }
 
 /**
- * Transcribe an audio file using the Groq Whisper API directly via fetch.
- * If the request gets a 403 (VPN/IP block), automatically retries through
- * a residential proxy when VOICE_PROXY_ENABLED is true and proxies are configured.
+ * Transcribes a local audio file using the Groq Whisper API, retrying through a residential proxy on 403 when proxying is enabled.
+ *
+ * @param filePath - Filesystem path to the audio file to transcribe
+ * @param options - Optional transcription settings
+ * @param options.timeoutMs - Maximum time in milliseconds to wait for the API response (defaults to config.VOICE_TIMEOUT_MS)
+ * @param options.allowEmpty - If true, returns an empty string when the transcription is empty instead of throwing
+ * @returns The trimmed transcription text
+ * @throws If GROQ_API_KEY is not configured
+ * @throws When the Groq Whisper API responds with a non-OK status (error includes status and up to 300 chars of body)
+ * @throws If the transcription is empty and `options.allowEmpty` is not true
  */
 export async function transcribeFile(filePath: string, options?: TranscribeOptions): Promise<string> {
   if (!config.GROQ_API_KEY) {

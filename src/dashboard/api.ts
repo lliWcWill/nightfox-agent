@@ -22,6 +22,13 @@ export const agentStatuses: Map<string, AgentStatusInfo> = new Map([
 const TASKS_DIR = join(homedir(), '.claudegram');
 const TASKS_FILE = join(TASKS_DIR, 'dashboard-tasks.json');
 
+/**
+ * Loads persisted dashboard tasks from the tasks file in the user's home directory.
+ *
+ * Attempts to read and parse the tasks JSON file; if the file is missing or contains invalid JSON, returns an empty array.
+ *
+ * @returns An array of stored DashboardTask objects, or an empty array if none are available.
+ */
 function loadTasks(): DashboardTask[] {
   if (!existsSync(TASKS_FILE)) return [];
   try {
@@ -31,6 +38,14 @@ function loadTasks(): DashboardTask[] {
   }
 }
 
+/**
+ * Persist the provided dashboard tasks to the user's tasks file on disk.
+ *
+ * Ensures the tasks directory exists and writes the tasks array as pretty-printed JSON
+ * to the configured TASKS_FILE path.
+ *
+ * @param tasks - The array of DashboardTask objects to persist
+ */
 function saveTasks(tasks: DashboardTask[]): void {
   if (!existsSync(TASKS_DIR)) mkdirSync(TASKS_DIR, { recursive: true });
   writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
@@ -38,7 +53,13 @@ function saveTasks(tasks: DashboardTask[]): void {
 
 // ── Request helpers ─────────────────────────────────────────────────
 
-const MAX_BODY = 1024 * 1024; // 1 MB
+const MAX_BODY = 1024 * 1024; /**
+ * Parses and returns the JSON body of an incoming HTTP request, enforcing a 1 MB limit.
+ *
+ * @param req - The incoming HTTP request to read the body from
+ * @returns The parsed JSON value, or an empty object if the body is missing or contains invalid JSON
+ * @throws If the request emits an error or if the body size exceeds 1 MB
+ */
 
 function parseBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -60,6 +81,13 @@ function parseBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
+/**
+ * Send a JSON response with common CORS headers and the specified status code.
+ *
+ * @param res - HTTP ServerResponse to write the response to
+ * @param data - Value to serialize as the JSON response body
+ * @param status - HTTP status code to send (defaults to 200)
+ */
 function json(res: ServerResponse, data: unknown, status = 200): void {
   res.writeHead(status, {
     'Content-Type': 'application/json',
@@ -70,11 +98,23 @@ function json(res: ServerResponse, data: unknown, status = 200): void {
   res.end(JSON.stringify(data));
 }
 
+/**
+ * Send a 404 JSON response with a standard not-found error payload.
+ *
+ * @param res - HTTP server response to write the status and body to
+ */
 function notFound(res: ServerResponse): void {
   json(res, { error: 'Not found' }, 404);
 }
 
-// ── Route handler ───────────────────────────────────────────────────
+/**
+ * Handle incoming HTTP requests for the dashboard API and send responses for matched routes.
+ *
+ * Supported routes include CORS preflight, sessions, agents status, queue, usage by chatId,
+ * config, voice sessions, and CRUD operations for persisted dashboard tasks.
+ *
+ * @returns `true` if the request was handled by this API handler (a response was sent), `false` otherwise.
+ */
 
 export async function handleApiRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = new URL(req.url || '/', `http://${req.headers.host}`);

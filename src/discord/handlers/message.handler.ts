@@ -36,8 +36,12 @@ interface ReplyContext {
 }
 
 /**
- * If the message is a reply, fetch the referenced message and build context.
- * Handles: text content, audio attachments (transcribe), image attachments (save + reference).
+ * Constructs a contextual prompt from the message that this message replies to.
+ *
+ * Builds a prompt including the replied-to message's text, a transcription if the replied-to message has an audio attachment (when transcription is available), and a note for image attachments.
+ *
+ * @param message - The Discord message that may reference another message
+ * @returns A ReplyContext containing `prompt` (combined referenced content and notes) and `audioTranscript` (the transcription string or `null`), or `null` if there is no referenced message or no usable referenced content
  */
 async function buildReplyContext(message: Message): Promise<ReplyContext | null> {
   if (!message.reference?.messageId) return null;
@@ -93,6 +97,16 @@ async function buildReplyContext(message: Message): Promise<ReplyContext | null>
   return { prompt: parts.join('\n\n'), audioTranscript };
 }
 
+/**
+ * Process an image attachment from a Discord message: validate and save it to the session workspace, build an agent prompt describing the upload, enqueue processing, and stream the agent's response back to Discord.
+ *
+ * This uploads the image into the current session's uploads directory, checks size and file type, corrects the file extension, constructs a prompt that includes the saved path and optional caption, queues the request for the agent, shows queue/processing state (hourglass reaction and queued position), streams progress and tool activity to the channel, and on completion sends the assistant response (optionally as a voice reply) and notices. Errors are sanitized and reported to the user.
+ *
+ * @param message - The original Discord message containing the attachment
+ * @param imageAttachment - The image attachment to validate and handle
+ * @param isThread - True when the message is posted inside a thread
+ * @param isMentioned - True when the bot was explicitly mentioned in the message
+ */
 async function handleImageAttachment(
   message: Message,
   imageAttachment: Attachment,
@@ -223,6 +237,19 @@ async function handleImageAttachment(
   }
 }
 
+/**
+ * Process an incoming Discord message directed at the bot and produce an agent response.
+ *
+ * Handles mention/thread gating and ignores bot messages; enforces authorization; routes
+ * voice and image attachments to their respective handlers; builds context from replied-to
+ * messages (including optional audio transcription and image references); validates that a
+ * project/session exists; manages queue position and an hourglass reaction; submits the
+ * request to the agent queue; streams progress and final assistant output back to Discord;
+ * optionally sends a voice reply and visibility notices; and surfaces a sanitized error
+ * message on failure.
+ *
+ * @param message - The Discord message to process
+ */
 export async function handleMessage(message: Message): Promise<void> {
   // Ignore bot messages
   if (message.author.bot) return;

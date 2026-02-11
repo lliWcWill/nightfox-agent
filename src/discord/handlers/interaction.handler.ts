@@ -24,6 +24,11 @@ import { handleDroid } from '../commands/droid.js';
 import { handleExtract } from '../commands/extract.js';
 import { sanitizeError } from '../../utils/sanitize.js';
 
+/**
+ * Dispatches a Discord interaction to the matching command handler after authorization and sends sanitized error feedback to the user on failure.
+ *
+ * @param interaction - The incoming Discord interaction to authorize and dispatch; supports message context menu and chat input commands.
+ */
 export async function handleInteraction(interaction: Interaction): Promise<void> {
   // Context menu commands
   if (interaction.isMessageContextMenuCommand()) {

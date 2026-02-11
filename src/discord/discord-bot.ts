@@ -10,10 +10,20 @@ import { handleMessage } from './handlers/message.handler.js';
 
 let botClient: Client | null = null;
 
+/**
+ * Retrieve the current Discord client instance managed by this module.
+ *
+ * @returns The active `Client` instance, or `null` if the client has not been created.
+ */
 export function getDiscordClient(): Client | null {
   return botClient;
 }
 
+/**
+ * Create and configure a Discord.js client with the required gateway intents, register ready/interaction/message event handlers, and store it in the module-scoped `botClient`.
+ *
+ * @returns The initialized Discord Client instance.
+ */
 export function createDiscordBot(): Client {
   const client = new Client({
     intents: [

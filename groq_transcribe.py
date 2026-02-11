@@ -11,15 +11,15 @@ from groq import Groq
 
 def transcribe_with_groq(audio_path, task="translate", language="ru"):
     """
-    Transcribe or translate audio using Groq's Whisper API
-
-    Args:
-        audio_path: Path to audio file (wav, mp3, flac, etc.)
-        task: "transcribe" (keep original language) or "translate" (to English)
-        language: Source language code (e.g., "ru" for Russian)
-
+    Transcribes or translates an audio file using the Groq Whisper API.
+    
+    Parameters:
+        audio_path (str): Path to the input audio file (e.g., .wav, .mp3, .flac).
+        task (str): Either "transcribe" to keep the original language or "translate" to produce English output.
+        language (str): Source language code used for transcription/translation (e.g., "ru").
+    
     Returns:
-        dict with text and segments
+        result: The Groq API response object containing the full text and segment/timestamp information.
     """
     client = Groq()
 
@@ -58,7 +58,15 @@ def transcribe_with_groq(audio_path, task="translate", language="ru"):
 
 
 def format_timestamp_srt(seconds):
-    """Convert seconds to SRT timestamp format (HH:MM:SS,mmm)"""
+    """
+    Format a time given in seconds into an SRT timestamp string.
+    
+    Parameters:
+        seconds (float): Time in seconds (may be fractional). Fractional seconds are converted to milliseconds by truncating toward zero.
+    
+    Returns:
+        str: SRT-formatted timestamp in the form "HH:MM:SS,mmm".
+    """
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     secs = int(seconds % 60)
@@ -68,15 +76,17 @@ def format_timestamp_srt(seconds):
 
 def result_to_srt(result, min_gap=2.0, merge_threshold=0.5):
     """
-    Convert Groq result to SRT format
-
-    Args:
-        result: Groq API response
-        min_gap: Minimum gap (seconds) to keep between segments (removes long silences)
-        merge_threshold: Merge segments closer than this (seconds)
-
+    Convert a Groq Whisper API result into SRT subtitle text.
+    
+    If the result contains time-coded segments, segments separated by gaps larger than `min_gap` are compressed so long silences are reduced to `min_gap` seconds; nearby segments are preserved and empty-text segments are skipped. If the result has no segments, a single 10-second SRT block is produced using `result.text`. The `merge_threshold` parameter is accepted for compatibility but is not used by the current implementation.
+    
+    Parameters:
+        result: Groq API response object with `.segments` (or a segments list) and `.text`.
+        min_gap (float): Minimum gap in seconds to keep between segments; gaps larger than this are compressed.
+        merge_threshold (float): Threshold (seconds) intended for merging nearby segments; currently unused.
+    
     Returns:
-        SRT formatted string
+        str: SRT-formatted string containing subtitle blocks (index, timestamp, text).
     """
     segments = result.segments if hasattr(result, 'segments') else []
 
@@ -129,6 +139,24 @@ def result_to_srt(result, min_gap=2.0, merge_threshold=0.5):
 
 
 def main():
+    """
+    Command-line entry point that transcribes or translates an audio file using Groq Whisper and writes SRT or raw JSON output.
+    
+    Parses CLI arguments for:
+    - audio_file: path to the input audio file.
+    - --task: "transcribe" (keep original language) or "translate" (to English).
+    - --language: source language code (default "ru").
+    - --output / -o: optional path to save SRT output.
+    - --compress-silence: minimum gap (seconds) to compress when generating SRT (default 2.0).
+    - --json: if set, prints the raw JSON response instead of SRT.
+    
+    Behavior:
+    - Validates that the audio file exists and that the GROQ_API_KEY environment variable is set; exits with status 1 on failure.
+    - Calls transcribe_with_groq to obtain the API result.
+    - If --json is specified, prints the JSON representation of the result.
+    - Otherwise converts the result to SRT (respecting --compress-silence) and writes it to --output if provided or prints it to stdout.
+    - Prints the full transcribed/translated text at the end.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(description="Transcribe/translate audio using Groq Whisper API")

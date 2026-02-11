@@ -21,10 +21,22 @@ const GROQ_VOICES = ['autumn', 'diana', 'hannah', 'austin', 'daniel', 'troy'];
 const OPENAI_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse', 'marin', 'cedar'];
 const COLLECTOR_TIMEOUT_MS = 60_000;
 
+/**
+ * Selects the list of available TTS voice names for the currently configured provider.
+ *
+ * @returns An array of voice name strings corresponding to the active TTS provider (GROQ or OpenAI)
+ */
 function getVoicesForProvider(): string[] {
   return config.TTS_PROVIDER === 'groq' ? GROQ_VOICES : OPENAI_VOICES;
 }
 
+/**
+ * Handle the TTS slash-command by executing the action specified by the interaction's subcommand.
+ *
+ * The interaction's subcommand determines which TTS operation to perform (speak, enable, disable, select voice, or show status).
+ *
+ * @param interaction - The ChatInputCommandInteraction that invoked the TTS command; must include a subcommand option.
+ */
 export async function handleTTS(interaction: ChatInputCommandInteraction): Promise<void> {
   const subcommand = interaction.options.getSubcommand();
 
@@ -41,6 +53,13 @@ export async function handleTTS(interaction: ChatInputCommandInteraction): Promi
   }
 }
 
+/**
+ * Handles the "speak" TTS subcommand: presents selectable voice buttons, generates speech for the chosen voice, and sends the resulting audio file.
+ *
+ * The handler validates that a provider API key is configured, defers the initial reply, shows a voice selection UI, restricts button use to the command author, generates audio for the selected voice, and posts the audio as a follow-up. If the user does not select a voice within the timeout, the selection is cancelled.
+ *
+ * @param interaction - The ChatInputCommandInteraction that initiated the speak command
+ */
 async function handleSpeak(interaction: ChatInputCommandInteraction): Promise<void> {
   const text = interaction.options.getString('text', true);
 
@@ -114,6 +133,12 @@ async function handleSpeak(interaction: ChatInputCommandInteraction): Promise<vo
   });
 }
 
+/**
+ * Toggle text-to-speech for the invoking user and reply with the updated status.
+ *
+ * @param interaction - The command interaction used to identify the user and send the confirmation reply
+ * @param enabled - Whether TTS should be enabled (`true`) or disabled (`false`)
+ */
 async function handleToggle(interaction: ChatInputCommandInteraction, enabled: boolean): Promise<void> {
   const chatId = discordChatId(interaction.user.id);
   setTTSEnabled(chatId, enabled);
@@ -122,6 +147,11 @@ async function handleToggle(interaction: ChatInputCommandInteraction, enabled: b
   await interaction.reply(`TTS **${state}** — voice: **${settings.voice}** (${config.TTS_PROVIDER})`);
 }
 
+/**
+ * Presents an interactive button grid to choose and set the user's default TTS voice.
+ *
+ * Sends a reply containing buttons for each available provider voice, handles a single button press from the command author to persist the chosen voice and confirm the change, and updates the reply if the selection times out.
+ */
 async function handleVoiceSelect(interaction: ChatInputCommandInteraction): Promise<void> {
   const chatId = discordChatId(interaction.user.id);
   const settings = getTTSSettings(chatId);
@@ -171,6 +201,13 @@ async function handleVoiceSelect(interaction: ChatInputCommandInteraction): Prom
   });
 }
 
+/**
+ * Shows the invoking user's current TTS configuration in an ephemeral reply.
+ *
+ * The reply includes TTS enabled state (ON/OFF), configured provider, selected voice, and whether an API key is configured for the current provider.
+ *
+ * @param interaction - The chat input interaction to reply to
+ */
 async function handleTTSStatus(interaction: ChatInputCommandInteraction): Promise<void> {
   const chatId = discordChatId(interaction.user.id);
   const settings = getTTSSettings(chatId);

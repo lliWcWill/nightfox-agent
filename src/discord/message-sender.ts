@@ -20,8 +20,13 @@ import {
 const ESC = '\x1b';
 
 /**
- * Inject real ESC bytes into ```ansi code blocks.
- * Claude outputs literal text like [1;33m — Discord needs \x1b[1;33m.
+ * Injects real ESC (U+001B) bytes into triple-backticked ```ansi code blocks in the given text.
+ *
+ * Converts literal escape representations and ensures bare ANSI sequences inside ```ansi blocks
+ * are prefixed with an actual ESC byte so they become proper ANSI escape sequences.
+ *
+ * @param content - The input text that may contain ```ansi code blocks
+ * @returns The input text with ESC bytes injected into ANSI code blocks
  */
 function injectAnsiEscapes(content: string): string {
   return content.replace(/```ansi\n([\s\S]*?)```/g, (_match, block: string) => {
@@ -84,8 +89,10 @@ const PLAIN_TEXT_THRESHOLD = 2000; // Under this: plain markdown message
 const FILE_FALLBACK_THRESHOLD = EMBED_MAX_DESCRIPTION * 4;
 
 /**
- * Build EmbedBuilder(s) from a response string.
- * Splits at 4096-char embed description boundary.
+ * Create EmbedBuilder objects that represent the given response split into Discord-safe description chunks.
+ *
+ * @param content - The full response text to paginate into embed descriptions
+ * @returns An array of EmbedBuilder instances, each containing up to 4096 characters of the response; at most 10 embeds are returned, with footers indicating their part number when multiple embeds are produced
  */
 function buildResponseEmbeds(content: string): EmbedBuilder[] {
   const chunks = splitDiscordMessage(content, EMBED_MAX_DESCRIPTION);
@@ -109,6 +116,12 @@ function buildResponseEmbeds(content: string): EmbedBuilder[] {
   return embeds;
 }
 
+/**
+ * Generate an embed representing a thinking/processing state using the current animation frame.
+ *
+ * @param frameIndex - Index used to select a frame from the thinking animation frames
+ * @returns An EmbedBuilder with the thinking color and a description that combines the frame's dots and status text
+ */
 function buildThinkingEmbed(frameIndex: number): EmbedBuilder {
   const frame = THINKING_FRAMES[frameIndex % THINKING_FRAMES.length];
   return new EmbedBuilder()
@@ -116,6 +129,17 @@ function buildThinkingEmbed(frameIndex: number): EmbedBuilder {
     .setDescription(`**${frame.dots}** ${frame.text}`);
 }
 
+/**
+ * Create an embed describing a tool's active operation, including a spinner frame, tool icon, action label, optional detail, and an optional content footer.
+ *
+ * @param spinnerIndex - Index into the spinner frames used to select the spinner glyph
+ * @param toolName - Tool identifier used to derive the icon displayed in the embed
+ * @param action - Human-friendly action label (e.g., "Reading", "Running")
+ * @param detail - Optional additional detail shown after the action
+ * @param contentLength - When greater than zero, adds a footer showing the character count
+ * @param lineCount - When `contentLength > 0`, the number of lines displayed in the footer alongside the character count
+ * @returns An EmbedBuilder with TOOL_COLOR, a description containing the spinner, icon, bolded action and optional detail, and a footer formatted as "`{chars} chars | {lines} lines`" when content length is provided
+ */
 function buildToolEmbed(
   spinnerIndex: number,
   toolName: string,

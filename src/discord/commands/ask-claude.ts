@@ -5,6 +5,13 @@ import { sendToAgent } from '../../claude/agent.js';
 import { sessionManager } from '../../claude/session-manager.js';
 import { queueRequest, setAbortController } from '../../claude/request-queue.js';
 
+/**
+ * Handle a message context-menu command that asks the Claude agent to analyze the selected message.
+ *
+ * Validates that the target message has text and that the invoking user has an active project session, defers the reply, enqueues a request to the agent using the user's chat session, and streams the agent's response back to the channel while supporting abort and tool-operation updates.
+ *
+ * @param interaction - The MessageContextMenuCommandInteraction triggered on a target message
+ */
 export async function handleAskClaude(interaction: MessageContextMenuCommandInteraction): Promise<void> {
   const targetMessage = interaction.targetMessage;
   const text = targetMessage.content;

@@ -13,6 +13,12 @@ const ALL_EVENTS: DashboardEventType[] = [
 
 let wss: WebSocketServer | null = null;
 
+/**
+ * Create and attach a WebSocket server at `/ws` that broadcasts dashboard events to connected clients.
+ *
+ * @param server - The HTTP server to bind the WebSocket server to.
+ * @returns The created WebSocketServer instance.
+ */
 export function attachWebSocket(server: Server): WebSocketServer {
   wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -39,6 +45,11 @@ export function attachWebSocket(server: Server): WebSocketServer {
   return wss;
 }
 
+/**
+ * Broadcasts a dashboard message to all connected WebSocket clients.
+ *
+ * @param message - The message to serialize and send to every client currently connected with an open socket
+ */
 function broadcast(message: WsMessage): void {
   if (!wss) return;
   const data = JSON.stringify(message);

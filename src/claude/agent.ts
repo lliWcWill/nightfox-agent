@@ -68,10 +68,26 @@ const chatModels: Map<number, string> = new Map();
 // Cache latest usage per chat for /context and /status commands
 const chatUsageCache: Map<number, AgentUsage> = new Map();
 
+/**
+ * Retrieve the cached usage metrics for a chat session.
+ *
+ * @param chatId - The numeric chat identifier
+ * @returns The cached `AgentUsage` for `chatId`, or `undefined` if no cached entry exists
+ */
 export function getCachedUsage(chatId: number): AgentUsage | undefined {
   return chatUsageCache.get(chatId);
 }
 
+/**
+ * Builds the assistant's base system prompt tailored to the target platform.
+ *
+ * The prompt includes general assistant guidelines, platform-specific response-formatting
+ * constraints (Discord or Telegraph/Telegram), alternatives to markdown tables, and
+ * a brief Reddit tool usage section.
+ *
+ * @param platform - Target platform shaping formatting and rendering rules; defaults to 'telegram'
+ * @returns The full system prompt string appropriate for the specified platform
+ */
 function getBaseSystemPrompt(platform: Platform = 'telegram'): string {
   const commonGuidelines = `You are ${config.BOT_NAME}, an AI assistant.
 
@@ -238,6 +254,18 @@ Reasoning Summary (required when enabled):
 - Do NOT reveal chain-of-thought, hidden reasoning, or sensitive tool outputs.
 - Skip the summary for very short acknowledgements or pure error messages.`;
 
+/**
+ * Builds the assistant system prompt tailored to the target platform.
+ *
+ * For `discord`, the prompt is the platform-specific base prompt optionally
+ * extended with the configured reasoning-summary instructions. For other
+ * platforms (default `telegram`), the prompt includes the base prompt plus
+ * Reddit, Medium, and media-extraction tool prompts and, if enabled in
+ * configuration, the reasoning-summary instructions.
+ *
+ * @param platform - The target platform to tailor the prompt for; defaults to `'telegram'`.
+ * @returns The assembled system prompt string appropriate for the given platform.
+ */
 function getSystemPrompt(platform: Platform = 'telegram'): string {
   const base = getBaseSystemPrompt(platform);
 
@@ -297,6 +325,32 @@ function getPermissionMode(command?: string): PermissionMode {
   return 'acceptEdits';
 }
 
+/**
+ * Send a prompt to the Claude agent for a chat and return the aggregated response and metadata.
+ *
+ * Sends the given message to the agent using the chat's session and working directory, streams progress
+ * via callbacks, records tool usage and session/compaction events, updates conversation history and usage cache,
+ * and emits lifecycle events on the event bus.
+ *
+ * @param chatId - Numeric identifier for the chat/conversation
+ * @param message - The user prompt to send to the agent
+ * @param options - Optional settings and callbacks:
+ *   - onProgress: called with progressively accumulated assistant text
+ *   - onToolStart: called when the agent begins a tool run; receives (toolName, input)
+ *   - onToolEnd: called when a tool run completes (summary may be provided separately)
+ *   - abortController: controller to cancel the in-flight request
+ *   - command: special command context (e.g., 'explore') that can modify prompt/permissions
+ *   - model: override model identifier to use for this request
+ *   - platform: platform hint ('telegram' | 'discord') used to assemble the system prompt
+ * @returns The agent response object containing:
+ *   - `text`: assistant response with internal Reasoning Summary removed when applicable
+ *   - `toolsUsed`: ordered list of tool names observed during the request
+ *   - `usage`: optional usage metrics extracted from the agent result
+ *   - `compaction`: optional compaction event metadata if compaction was signaled
+ *   - `sessionInit`: optional session initialization metadata observed from the agent
+ * @throws Error when there is no active session for the chat (use /project to set working directory)
+ * @throws Error when the agent request fails (emitted as an `agent:error` event prior to throwing)
+ */
 export async function sendToAgent(
   chatId: number,
   message: string,

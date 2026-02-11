@@ -27,7 +27,12 @@ DELAY_RANGE = [2, 5]
 
 
 def output_json(data: dict):
-    """Print JSON result to stdout and exit."""
+    """
+    Prints the given dictionary as JSON to stdout and exits the process with status 0.
+    
+    Parameters:
+        data (dict): The mapping to serialize and output as JSON.
+    """
     print(json.dumps(data))
     sys.exit(0)
 
@@ -39,7 +44,14 @@ def output_error(msg: str, code: str = 'UNKNOWN'):
 
 
 def load_credentials() -> tuple[str, str]:
-    """Load saved credentials."""
+    """
+    Load stored Instagram credentials from the persistent credentials file.
+    
+    If the credentials file is missing, emits a `NO_CREDENTIALS` error via output_error and exits the process.
+    
+    Returns:
+        tuple[str, str]: A tuple containing the saved username and password.
+    """
     if not os.path.exists(CREDS_FILE):
         output_error(
             'No credentials found. Run: python3 insta_extract.py --login',
@@ -51,7 +63,14 @@ def load_credentials() -> tuple[str, str]:
 
 
 def get_client():
-    """Create and authenticate an instagrapi client with session reuse."""
+    """
+    Return a configured instagrapi Client using the stored session or saved credentials.
+    
+    If no SESSION_FILE exists, emits a NO_SESSION error and exits. If saved credentials include a password, the client will perform a credential login; otherwise the client will use imported session data (ds_user_id) without calling login. The client's settings are loaded from SESSION_FILE and its delay range is set from DELAY_RANGE.
+    
+    Returns:
+        instagrapi.Client: A configured instagrapi client ready for API calls.
+    """
     from instagrapi import Client
     from instagrapi.exceptions import LoginRequired
 
@@ -85,7 +104,14 @@ def get_client():
 
 
 def extract_shortcode(url: str) -> str:
-    """Extract the media shortcode from an Instagram URL."""
+    """
+    Extract the Instagram media shortcode from a media URL.
+    
+    If a shortcode cannot be found, calls `output_error` with code `"BAD_URL"` (which writes an error JSON and exits the process).
+    
+    Returns:
+        shortcode (str): The extracted shortcode (e.g., the alphanumeric ID used in Instagram media URLs).
+    """
     m = re.search(r'(?:reel|p|tv)/([A-Za-z0-9_-]+)', url)
     if m:
         return m.group(1)
@@ -93,7 +119,16 @@ def extract_shortcode(url: str) -> str:
 
 
 def extract_audio_from_video(video_path: str, output_dir: str) -> str | None:
-    """Use ffmpeg subprocess to extract audio from video."""
+    """
+    Extracts the audio track from a video file and writes it as an MP3 in the specified output directory.
+    
+    Parameters:
+        video_path (str): Path to the source video file.
+        output_dir (str): Directory where `audio.mp3` will be written.
+    
+    Returns:
+        str | None: Path to the extracted `audio.mp3` if extraction succeeded and the file is non-empty, `None` otherwise. Returns `None` on timeout or if the ffmpeg executable is not available.
+    """
     audio_path = os.path.join(output_dir, 'audio.mp3')
     try:
         subprocess.run(
@@ -108,7 +143,14 @@ def extract_audio_from_video(video_path: str, output_dir: str) -> str | None:
 
 
 def do_import_session(cookies_path: str):
-    """Import session from browser cookies.txt — no login API call needed."""
+    """
+    Import an Instagram session from a Netscape-format cookies.txt file and save a reusable session without performing an API login.
+    
+    Parses Instagram cookies from the provided cookies file, requires a `sessionid` cookie (exits with status 1 if missing), and constructs session settings which are written to SESSION_FILE. Also writes a credentials reference to CREDS_FILE (file mode 0o600) so the saved session can be reused by the script. Prints brief status information about the imported session.
+    
+    Parameters:
+        cookies_path (str): Path to a Netscape-format cookies.txt file containing Instagram cookies (e.g., exported from a browser).
+    """
     from instagrapi import Client
 
     os.makedirs(SESSION_DIR, exist_ok=True)
@@ -209,7 +251,17 @@ def do_import_session(cookies_path: str):
 
 
 def do_login(cli_username: str = None, cli_password: str = None, proxy: str = None):
-    """Interactive first-time login flow."""
+    """
+    Perform an interactive first-time login to create and persist a mobile API session for Instagram.
+    
+    Attempts to log in with provided credentials or prompts the user for username and password if none are given. On successful authentication this writes session settings to SESSION_FILE and plaintext credentials to CREDS_FILE (file mode 0o600), and prints status messages. The created session is expected to remain valid for roughly 60–90 days. On authentication failures or verification challenges the function prints diagnostic messages and exits the process.
+    
+    Parameters:
+        cli_username (str | None): Optional username to use instead of prompting. If provided, cli_password must also be provided to avoid interactive prompts.
+        cli_password (str | None): Optional password to use instead of prompting.
+        proxy (str | None): Optional proxy URL to configure the client through a proxy (e.g., "http://user:pass@host:port" or "http://host:port").
+    
+    """
     from instagrapi import Client
     from instagrapi.exceptions import (
         TwoFactorRequired, ChallengeRequired,
@@ -291,7 +343,20 @@ def do_login(cli_username: str = None, cli_password: str = None, proxy: str = No
 
 
 def do_extract(url: str, mode: str, output_dir: str):
-    """Extract media from an Instagram URL."""
+    """
+    Extract metadata and (optionally) download video and/or audio for an Instagram post identified by URL.
+    
+    Given an Instagram URL, resolve the post, build a result object containing title, duration, and username, and depending on `mode`:
+    - "meta": emit only metadata,
+    - "video": download the post video (if available) and include `video_path` or a warning,
+    - "audio": extract audio from the video and include `audio_path` or a warning,
+    - "all": perform both video download and audio extraction.
+    
+    Parameters:
+        url (str): Instagram post URL (any /p/, /reel/, or /tv/ style URL containing the shortcode).
+        mode (str): One of "meta", "video", "audio", or "all" controlling what is produced/downloaded.
+        output_dir (str): Directory where downloaded assets and extracted audio will be written.
+    """
     from instagrapi.exceptions import (
         MediaNotFound, FeedbackRequired, PleaseWaitFewMinutes,
         SentryBlock, LoginRequired, ClientError,
@@ -373,6 +438,17 @@ def do_extract(url: str, mode: str, output_dir: str):
 
 
 def main():
+    """
+    Entry point for the CLI that parses command-line arguments and dispatches to the appropriate workflow.
+    
+    Supports subcommands and flags:
+    - --import-session COOKIES_PATH: import a browser cookies.txt session and exit.
+    - --login [--username USERNAME] [--password PASSWORD] [--proxy PROXY]: perform first-time interactive login and exit.
+    - --session-check: validate the stored session and print JSON status.
+    - Extraction mode (requires --url and --output-dir): extract media according to --mode (video, audio, meta, all).
+    
+    The function prints JSON results or errors via the module's output helpers and exits after performing the selected action.
+    """
     parser = argparse.ArgumentParser(description='Instagram extraction via instagrapi')
     parser.add_argument('--login', action='store_true', help='First-time login')
     parser.add_argument('--username', help='Instagram username (for --login)')

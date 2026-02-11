@@ -4,6 +4,12 @@ import { config } from '../config.js';
 /** A channel that supports sending messages. */
 type SendableChannel = { send: (...args: any[]) => Promise<any> };
 
+/**
+ * Format a token count into a compact human-readable string.
+ *
+ * @param n - The token count to format
+ * @returns A compact string using `k` for thousands and `M` for millions (one decimal place when abbreviated), or the integer as a string for smaller values
+ */
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
@@ -11,8 +17,13 @@ function fmtTokens(n: number): string {
 }
 
 /**
- * Send a Discord embed when the agent context was compacted.
- * Mirrors the Telegram `sendCompactionNotification`.
+ * Notify a Discord channel with an embed describing a context compaction event.
+ *
+ * The embed indicates whether compaction was automatic or manual and shows the
+ * previous context size in human-readable tokens.
+ *
+ * @param channel - The channel (or channel-like object) used to send the embed
+ * @param compaction - Details about the compaction: `trigger` is `'manual'` or `'auto'`, and `preTokens` is the token count before compaction
  */
 export async function sendCompactionNotice(
   channel: SendableChannel,
@@ -39,8 +50,14 @@ export async function sendCompactionNotice(
 }
 
 /**
- * Send a Discord embed when a new agent session starts (session ID changed).
- * Mirrors the Telegram `sendSessionInitNotification`.
+ * Notifies a Discord channel when an agent starts a new session (session ID changes).
+ *
+ * Does nothing if compaction notifications are disabled, `sessionInit` is missing, or the new session ID
+ * is the same as `previousSessionId`. When sent, the message notes the model used and warns that the
+ * agent may not remember earlier details.
+ *
+ * @param sessionInit - Object containing the new session's `model` and `sessionId`
+ * @param previousSessionId - The prior session ID to compare against; notification is skipped if absent or unchanged
  */
 export async function sendSessionInitNotice(
   channel: SendableChannel,

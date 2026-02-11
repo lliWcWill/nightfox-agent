@@ -14,6 +14,11 @@ const COMMAND_LIST = [
   { name: 'Ask Claude', description: 'Right-click a message to analyze it (context menu)' },
 ];
 
+/**
+ * Sends the user an ephemeral message listing available bot commands and a short usage note.
+ *
+ * @param interaction - The incoming chat command interaction to reply to; the reply will be visible only to the invoking user.
+ */
 export async function handleCommands(interaction: ChatInputCommandInteraction): Promise<void> {
   const lines = COMMAND_LIST.map(cmd => `\`${cmd.name}\` — ${cmd.description}`);
 

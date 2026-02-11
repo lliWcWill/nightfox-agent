@@ -7,8 +7,11 @@
 const DEFAULT_MAX_LENGTH = 1900;
 
 /**
- * Split a message into chunks that fit within Discord's message limit.
- * Respects code block boundaries.
+ * Split a long text into chunks that fit within a Discord message length while preserving Markdown code block boundaries.
+ *
+ * @param text - The input text to split.
+ * @param maxLength - Maximum allowed length for each chunk; defaults to DEFAULT_MAX_LENGTH (1900).
+ * @returns An array of message-sized chunks that together equal the original text; each chunk does not exceed `maxLength` and code fences are closed/reopened as needed to preserve code blocks.
  */
 export function splitDiscordMessage(text: string, maxLength: number = DEFAULT_MAX_LENGTH): string[] {
   if (text.length <= maxLength) {

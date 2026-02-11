@@ -8,6 +8,13 @@ import {
 import { discordChatId } from '../id-mapper.js';
 import { setModel, getModel } from '../../claude/agent.js';
 
+/**
+ * Presents a model selection menu to the invoking user and updates the stored model when they make a choice.
+ *
+ * Sends an ephemeral reply showing the current model and a select menu (options: Opus, Sonnet, Haiku) with the current model preselected, listens for the user's selection for up to 60 seconds, updates the stored model for the user's chatId, and edits the reply to confirm the new model.
+ *
+ * @param interaction - The chat input command interaction that triggered the selector; the reply and selection are handled via this interaction
+ */
 export async function handleModel(interaction: ChatInputCommandInteraction): Promise<void> {
   const chatId = discordChatId(interaction.user.id);
   const current = getModel(chatId);

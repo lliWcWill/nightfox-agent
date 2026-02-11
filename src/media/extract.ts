@@ -124,7 +124,13 @@ export function platformLabel(platform: Platform): string {
   }
 }
 
-// ── Cookie Support ─────────────────────────────────────────────────
+/**
+ * Construct command-line arguments for yt-dlp to supply cookies based on configured sources.
+ *
+ * Prefers a browser cookie source if configured, otherwise falls back to a static cookies file if present; returns an empty array when no cookie source is available.
+ *
+ * @returns An array of yt-dlp cookie arguments (e.g. `['--cookies-from-browser', 'browserName']` or `['--cookies', '/path/to/cookies']`), or an empty array if no cookie configuration is available.
+ */
 
 function getCookieArgs(): string[] {
   // Prefer --cookies-from-browser (live session, auto-refreshing)
@@ -186,9 +192,10 @@ function runCommand(
 }
 
 /**
- * Run a yt-dlp command with automatic proxy fallback.
- * First tries without proxy. If it fails with an IP/auth error and proxies
- * are available, retries once through a residential proxy.
+ * Execute yt-dlp with an automatic one-time retry using a residential proxy when certain network or authentication errors occur.
+ *
+ * @param onRetry - Optional callback invoked with a user-facing message when a proxy retry is initiated
+ * @returns An object containing the `stdout` and `stderr` output produced by yt-dlp
  */
 async function runYtDlp(
   baseArgs: string[],
@@ -229,6 +236,15 @@ interface InstagrapiResult {
   code?: string;
 }
 
+/**
+ * Invokes the insta_extract.py helper to extract media files or metadata for an Instagram URL.
+ *
+ * @param url - The Instagram URL to process
+ * @param mode - Extraction mode: `'video'` to download video, `'audio'` to extract audio, `'meta'` to fetch metadata only, `'all'` to perform all available actions
+ * @param outputDir - Directory where extracted files should be written
+ * @returns The parsed `InstagrapiResult` object produced by the helper script
+ * @throws If the helper script reports an error, produces invalid output, or returns no output
+ */
 async function runInstagrapi(
   url: string,
   mode: 'video' | 'audio' | 'meta' | 'all',
@@ -265,6 +281,11 @@ async function runInstagrapi(
   });
 }
 
+/**
+ * Checks whether the Instagram helper script and a local Instagrapi session file are available.
+ *
+ * @returns `true` if both the insta_extract.py script and the `~/.claudegram/instagrapi/session.json` file exist, `false` otherwise.
+ */
 function isInstagrapiAvailable(): boolean {
   return fs.existsSync(INSTA_SCRIPT) &&
     fs.existsSync(path.join(os.homedir(), '.claudegram', 'instagrapi', 'session.json'));
@@ -519,6 +540,20 @@ export interface ExtractOptions {
   onProgress?: (message: string) => void;
 }
 
+/**
+ * Extracts media and metadata from the given URL, producing audio, transcript, subtitles, and/or video according to the requested mode.
+ *
+ * Performs metadata retrieval, optional subtitle download (YouTube), audio download, transcription (if needed), and video download, while emitting progress via the provided callback. A temporary working directory is created and its path is attached to the returned result for cleanup.
+ *
+ * @param opts - Extraction options: `url` (source URL), `mode` (what to extract: 'text' | 'audio' | 'video' | 'all' | 'all_chat'), optional `subtitleFormat` ('text' | 'srt' | 'vtt') to prefer YouTube subtitles, and optional `onProgress` callback for progress messages.
+ * @returns The ExtractResult containing:
+ *   - `platform`, `title`, `url`, `duration` — basic metadata;
+ *   - `transcript` — transcription text if produced or converted from subtitles;
+ *   - `subtitlePath` and `subtitleFormat` — path and format when subtitle file is provided (SRT/VTT);
+ *   - `audioPath` and `videoPath` — file paths for downloaded audio/video when available;
+ *   - `warnings` — array of user-facing warning messages produced during extraction;
+ *   - `_tempDir` — path to the temporary working directory created for this extraction (present on all results for cleanup).
+ */
 export async function extractMedia(opts: ExtractOptions): Promise<ExtractResult> {
   const { url, mode, subtitleFormat, onProgress } = opts;
   const platform = detectPlatform(url);

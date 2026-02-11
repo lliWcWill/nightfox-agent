@@ -21,9 +21,12 @@ import { sanitizeError, sanitizePath } from '../../utils/sanitize.js';
 import { maybeSendDiscordVoiceReply } from '../voice-reply.js';
 
 /**
- * Handle a Discord voice message (audio attachment with duration).
- * Downloads the audio, transcribes via Groq Whisper, shows the transcript,
- * and sends it to the Claude agent with streaming.
+ * Process a Discord voice attachment: download, transcribe with Groq Whisper, post the transcript to the channel, and stream the transcript to the Claude agent.
+ *
+ * @param message - The Discord message that contains the voice attachment
+ * @param attachment - The audio attachment to download and transcribe
+ * @param isThread - Whether the message was posted in a thread
+ * @param isMentioned - Whether the bot was directly mentioned in the message
  */
 export async function handleVoiceMessage(
   message: Message,

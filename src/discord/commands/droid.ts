@@ -14,7 +14,15 @@ const STREAM_UPDATE_INTERVAL_MS = 1500;
 const DROID_TIMEOUT_MS = 5 * 60 * 1000;
 const DISCORD_MSG_LIMIT = 2000;
 
-/** Split text into chunks respecting Discord's 2000-char limit */
+/**
+ * Split a long string into message-sized chunks suitable for posting to Discord.
+ *
+ * Splits prefer newline boundaries near the limit and trim leading whitespace from subsequent chunks.
+ *
+ * @param text - The input string to split
+ * @param limit - Maximum characters per chunk (defaults to Discord limit minus a safety margin)
+ * @returns An array of text chunks each no longer than `limit`
+ */
 function chunkText(text: string, limit = DISCORD_MSG_LIMIT - 50): string[] {
   const chunks: string[] = [];
   let remaining = text;
@@ -32,6 +40,13 @@ function chunkText(text: string, limit = DISCORD_MSG_LIMIT - 50): string[] {
   return chunks;
 }
 
+/**
+ * Run the Factory Droid command for a ChatInputCommandInteraction.
+ *
+ * Processes an optional prompt or audio attachment (transcribing voice when provided), starts a Droid run with the given options, streams progress to a newly created thread in the invoking channel, posts the final output (chunked for Discord limits), and may send a voice reply to the channel.
+ *
+ * @param interaction - The command interaction that invoked the Droid run; replies and thread messages are sent in response to this interaction.
+ */
 export async function handleDroid(interaction: ChatInputCommandInteraction): Promise<void> {
   let prompt = interaction.options.getString('prompt') || '';
   const model = interaction.options.getString('model') || undefined;

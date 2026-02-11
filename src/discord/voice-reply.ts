@@ -4,6 +4,12 @@ import { generateSpeech } from '../tts/tts.js';
 import { getTTSSettings, isTTSEnabled } from '../tts/tts-settings.js';
 import { discordChatId } from './id-mapper.js';
 
+/**
+ * Remove common Markdown constructs from a string.
+ *
+ * @param input - The Markdown-formatted text to clean
+ * @returns The cleaned text with code blocks removed, inline code backticks removed, Markdown links replaced by their link text, emphasis/strikethrough markers removed, headings, block quotes, and list markers stripped, consecutive blank lines collapsed, and leading/trailing whitespace trimmed
+ */
 function stripMarkdown(input: string): string {
   let text = input;
   text = text.replace(/```[\s\S]*?```/g, '');
@@ -18,10 +24,23 @@ function stripMarkdown(input: string): string {
   return text.trim();
 }
 
+/**
+ * Detects whether the string begins with a common error indicator.
+ *
+ * @param text - The input string to evaluate (leading/trailing whitespace is ignored)
+ * @returns `true` if the trimmed text starts with `❌`, `⚠️`, or `Error:`, `false` otherwise
+ */
 function looksLikeError(text: string): boolean {
   return /^(❌|⚠️|Error:)/.test(text.trim());
 }
 
+/**
+ * Truncates `text` to at most `maxChars` characters, preferring to cut at a sentence boundary when appropriate.
+ *
+ * @param text - The input string to truncate
+ * @param maxChars - Maximum allowed characters for the returned string
+ * @returns The original `text` if its length is less than or equal to `maxChars`; otherwise a truncated version. If truncation occurs and a sentence-ending punctuation (`.`, `!`, or `?`) exists after character 200 within the first `maxChars` characters, the result is shortened to end at that punctuation.
+ */
 function truncateToMax(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   const truncated = text.slice(0, maxChars);
@@ -34,7 +53,11 @@ function truncateToMax(text: string, maxChars: number): string {
   return truncated;
 }
 
-/** Get the file extension for the current TTS provider/format. */
+/**
+ * Selects the audio file extension used for TTS output based on configuration.
+ *
+ * @returns `'ogg'` for the Groq provider or when the configured response format is `'opus'`; otherwise the configured `TTS_RESPONSE_FORMAT` or `'mp3'` if none is set.
+ */
 function getTTSFileExtension(): string {
   if (config.TTS_PROVIDER === 'groq') return 'ogg';
   if (config.TTS_RESPONSE_FORMAT === 'opus') return 'ogg';

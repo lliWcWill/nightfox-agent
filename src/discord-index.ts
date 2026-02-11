@@ -5,6 +5,11 @@ import { disconnectAll } from './discord/voice-channel/voice-connection.js';
 import { config } from './config.js';
 import { startDashboardServer, stopDashboardServer } from './dashboard/server.js';
 
+/**
+ * Initialize and start the Claudegram Discord bot, register slash commands, optionally start the dashboard, and install a graceful shutdown sequence.
+ *
+ * When run, this function registers slash commands, starts the dashboard server if enabled, creates and logs in the Discord client using configured credentials, and registers handlers for SIGINT and SIGTERM. The installed shutdown routine stops the dashboard, disconnects all active voice sessions, destroys the Discord client, and exits the process with code 0.
+ */
 async function main() {
   console.log('Starting Claudegram Discord bot...');
   console.log(`Allowed users: ${discordConfig.DISCORD_ALLOWED_USER_IDS.join(', ')}`);

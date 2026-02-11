@@ -13,6 +13,12 @@ import { clearConversation } from '../../claude/agent.js';
 
 const COLLECTOR_TIMEOUT_MS = 60_000;
 
+/**
+ * Formats a past Date as a concise relative time string.
+ *
+ * @param date - The past date to compare with the current time
+ * @returns `'just now'` if less than 60 seconds, `'<Nm ago>'` if less than 60 minutes, `'<Nh ago>'` if less than 24 hours, otherwise `'<Nd ago>'`
+ */
 function formatTimeAgo(date: Date): string {
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
   if (seconds < 60) return 'just now';
@@ -24,6 +30,16 @@ function formatTimeAgo(date: Date): string {
   return `${days}d ago`;
 }
 
+/**
+ * Presents the user with a list of recent resumable sessions and lets them select one to resume.
+ *
+ * Displays up to five sessions that have a Claude session ID as buttons, collects the user's selection,
+ * resumes the chosen session, clears the current conversation state, and updates the reply with resumed
+ * session details. If no resumable sessions exist, replies ephemerally with guidance; if the selection
+ * times out, disables the buttons.
+ *
+ * @param interaction - The command interaction used to send the session list and receive button interactions
+ */
 export async function handleResume(interaction: ChatInputCommandInteraction): Promise<void> {
   const chatId = discordChatId(interaction.user.id);
 

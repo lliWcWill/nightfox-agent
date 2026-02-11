@@ -19,6 +19,16 @@ import { config } from '../../config.js';
 import { sanitizeError } from '../../utils/sanitize.js';
 
 
+/**
+ * Derives a concise thread title from Markdown content.
+ *
+ * Prefers the first Markdown heading; otherwise uses the first non-empty line with leading
+ * Markdown/formatting characters removed. If neither yields a title, uses `fallback`.
+ *
+ * @param markdown - The Markdown text to extract a title from
+ * @param fallback - The fallback title to use when no suitable text is found
+ * @returns The chosen title truncated to 100 characters
+ */
 function extractThreadTitle(markdown: string, fallback: string): string {
   const heading = markdown.match(/^#+\s+(.+)$/m);
   if (heading) return heading[1].slice(0, 100);
@@ -29,6 +39,14 @@ function extractThreadTitle(markdown: string, fallback: string): string {
 const COLLECTOR_TIMEOUT_MS = 5 * 60 * 1000;
 const CHAT_INLINE_LIMIT = 3000;
 
+/**
+ * Handle the `/reddit` slash command: fetch Reddit content for the requested target, present a preview with interactive buttons, and perform user-selected actions (send file, start an AI chat thread, or both).
+ *
+ * The handler fetches markdown and JSON for the target, shows an embed with a preview and three buttons (File, Chat, Both), and waits for the command author's choice. Depending on the selection it will:
+ * - Send the fetched content as a file (JSON for large results, Markdown otherwise).
+ * - Create a project-scoped thread, save the content to the project's .claudegram/reddit directory, queue an AI summarization request, and stream the agent's progress into the thread.
+ * The command gracefully reports fetch errors, enforces that only the command author may interact with the UI, disables buttons after selection or timeout, and sends ephemeral messages when project context or permissions prevent Chat mode.
+ */
 export async function handleReddit(interaction: ChatInputCommandInteraction): Promise<void> {
   const target = interaction.options.getString('target', true);
   const sort = interaction.options.getString('sort') || undefined;

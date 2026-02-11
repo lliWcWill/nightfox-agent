@@ -5,6 +5,13 @@ import { preventSleep, allowSleep } from './utils/caffeinate.js';
 import { stopCleanup } from './telegram/deduplication.js';
 import { startDashboardServer, stopDashboardServer } from './dashboard/server.js';
 
+/**
+ * Start and run the Telegram bot process, handling startup tasks and graceful shutdown.
+ *
+ * Performs startup logging, prevents system sleep, creates and initializes the bot, optionally
+ * starts the dashboard server, starts the concurrent runner to process updates, registers
+ * SIGINT/SIGTERM handlers to perform a guarded graceful shutdown, and waits until the runner stops.
+ */
 async function main() {
   console.log('🤖 Starting Claudegram...');
   console.log(`📋 Allowed users: ${config.ALLOWED_USER_IDS.join(', ')}`);

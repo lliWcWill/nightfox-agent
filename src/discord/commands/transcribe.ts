@@ -8,6 +8,15 @@ import { sanitizeError, sanitizePath } from '../../utils/sanitize.js';
 
 const FILE_THRESHOLD_CHARS = 2000;
 
+/**
+ * Transcribes an attached audio or video file from a chat input interaction and replies with the transcript.
+ *
+ * Validates the attachment and configuration, downloads the file, obtains a transcript, and edits the reply
+ * with either an inline transcript (when short) or a downloadable `.txt` attachment (when long). Cleans up
+ * temporary files and reports errors to the user.
+ *
+ * @param interaction - The chat input interaction containing a required `file` attachment to transcribe
+ */
 export async function handleTranscribe(interaction: ChatInputCommandInteraction): Promise<void> {
   const attachment = interaction.options.getAttachment('file', true);
 

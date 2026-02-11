@@ -6,8 +6,11 @@ let proxyList: string[] = [];
 let proxyIndex = 0;
 
 /**
- * Load proxies from the configured proxy list file.
- * Reuses YTDLP_PROXY_LIST_PATH — same residential proxy pool.
+ * Lazily loads proxy URLs from the configured proxy list file into the in-memory cache.
+ *
+ * If the list is already loaded or the configuration key `config.YTDLP_PROXY_LIST_PATH` is unset, this function is a no-op.
+ * When a file is present it reads UTF-8 lines, trims them, and retains only non-empty lines that do not start with `#`.
+ * On success it updates the module cache (`proxyList`) and logs the number of loaded proxies; on failure it logs a warning.
  */
 function ensureLoaded(): void {
   if (proxyList.length > 0) return;
@@ -29,7 +32,11 @@ function ensureLoaded(): void {
 }
 
 /**
- * Get the next proxy URL (round-robin).
+ * Selects and returns the next proxy URL from the configured list using round‑robin order.
+ *
+ * Advances the internal index so subsequent calls return the next proxy.
+ *
+ * @returns The next proxy URL, or `null` if no proxies are configured or available.
  */
 export function getNextProxy(): string | null {
   ensureLoaded();
@@ -45,6 +52,11 @@ export function getNextProxy(): string | null {
  */
 const ALLOWED_PROXY_PROTOCOLS = new Set(['http:', 'https:', 'socks4:', 'socks5:']);
 
+/**
+ * Create an undici ProxyAgent for the next configured proxy if one is available and valid.
+ *
+ * @returns `ProxyAgent` configured with the next proxy URL, or `null` if no proxy is available, the URL is malformed, or the proxy protocol is not allowed (`http:`, `https:`, `socks4:`, `socks5:`)
+ */
 export function getProxyDispatcher(): ProxyAgent | null {
   const proxyUrl = getNextProxy();
   if (!proxyUrl) return null;

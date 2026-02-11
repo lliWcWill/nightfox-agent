@@ -4,6 +4,15 @@ import { discordChatId } from '../id-mapper.js';
 import { sessionManager } from '../../claude/session-manager.js';
 import { clearConversation } from '../../claude/agent.js';
 
+/**
+ * Continues the invoking user's most recent session and notifies them of the resumed project.
+ *
+ * If a previous session exists, clears the conversation context for the chat and replies ephemerally
+ * with the project name, working directory, and a truncated Claude session ID when available.
+ * If no previous session exists, replies ephemerally with guidance to start a new session using `/project <path>`.
+ *
+ * @param interaction - The Discord chat input interaction that triggered the continue command
+ */
 export async function handleContinue(interaction: ChatInputCommandInteraction): Promise<void> {
   const chatId = discordChatId(interaction.user.id);
 

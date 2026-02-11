@@ -23,6 +23,17 @@ import {
 // Active browser states per user
 const browserStates = new Map<string, BrowserState>();
 
+/**
+ * Handle the `/project` chat command by either setting the user's project path immediately
+ * when a `path` option is provided, or launching an interactive in-channel directory browser
+ * to navigate and select a project directory.
+ *
+ * The interactive flow maintains per-user browser state, renders navigation UI, accepts
+ * directory selection, pagination, parent navigation, manual path entry via a modal, and
+ * commits the chosen directory as the user's project.
+ *
+ * @param interaction - The Discord ChatInputCommandInteraction for the invoking user and command options
+ */
 export async function handleProject(interaction: ChatInputCommandInteraction): Promise<void> {
   const chatId = discordChatId(interaction.user.id);
   const projectPath = interaction.options.getString('path');

@@ -14,6 +14,11 @@ import {
   getVoiceSession,
 } from '../voice-channel/voice-connection.js';
 
+/**
+ * Dispatches a chat input command interaction to the appropriate voice subcommand handler.
+ *
+ * @param interaction - The ChatInputCommandInteraction representing the invoked /voice command and its subcommand
+ */
 export async function handleVoice(interaction: ChatInputCommandInteraction): Promise<void> {
   const sub = interaction.options.getSubcommand();
 
@@ -35,6 +40,15 @@ export async function handleVoice(interaction: ChatInputCommandInteraction): Pro
   }
 }
 
+/**
+ * Connects the bot to the invoking user's voice channel and starts a Gemini Live audio session.
+ *
+ * Validates configuration and guild context, ensures the user is in a voice channel, defers the reply,
+ * opens the voice connection, and forwards Gemini text responses to the interaction's text channel.
+ * Edits the original reply with a success embed on join or an error message on failure.
+ *
+ * @param interaction - The Chat Input Command interaction that triggered the join request
+ */
 async function handleJoin(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!config.GEMINI_API_KEY) {
     await interaction.reply({ content: 'GEMINI_API_KEY not configured.', ephemeral: true });
@@ -94,6 +108,14 @@ async function handleJoin(interaction: ChatInputCommandInteraction): Promise<voi
   }
 }
 
+/**
+ * Handle the "leave" voice subcommand: disconnect the bot from the guild's voice channel and reply to the user.
+ *
+ * Checks that the command was issued in a server and that the bot is currently in a voice channel for that guild;
+ * replies with an ephemeral error message if either check fails. If connected, disconnects and sends a confirmation reply.
+ *
+ * @param interaction - The command interaction that invoked the subcommand
+ */
 async function handleLeave(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!interaction.guild) {
     await interaction.reply({ content: 'This command only works in a server.', ephemeral: true });
@@ -111,6 +133,13 @@ async function handleLeave(interaction: ChatInputCommandInteraction): Promise<vo
   await interaction.reply('Disconnected from voice channel.');
 }
 
+/**
+ * Sends the command's `text` option to the guild's active Gemini Live session and replies with a confirmation or error.
+ *
+ * Reads the required `text` string option from the interaction, verifies the command is executed in a guild and that a Gemini Live voice session is active for that guild, forwards the text to Gemini, and replies to the user indicating success or the reason for failure.
+ *
+ * @param interaction - The chat input command interaction containing the required `text` option
+ */
 async function handleSay(interaction: ChatInputCommandInteraction): Promise<void> {
   const text = interaction.options.getString('text', true);
 
@@ -136,6 +165,16 @@ async function handleSay(interaction: ChatInputCommandInteraction): Promise<void
   }
 }
 
+/**
+ * Display the current voice session status for the guild where the command was invoked.
+ *
+ * Replies ephemerally with an embed that includes the voice channel (or channel id if unknown),
+ * Gemini connection state (Connected / Disconnected), and the number of active listeners.
+ * If the command is used outside a guild, or if no voice session exists for the guild,
+ * an ephemeral informational message is sent instead.
+ *
+ * @param interaction - The chat input command interaction that triggered this status check
+ */
 async function handleStatus(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!interaction.guild) {
     await interaction.reply({ content: 'This command only works in a server.', ephemeral: true });

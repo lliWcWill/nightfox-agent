@@ -53,6 +53,14 @@ export function getQueuePosition(chatId: number): number {
   return queue ? queue.length : 0;
 }
 
+/**
+ * Enqueues a request for the specified chat and resolves with the handler's result once the request is processed.
+ *
+ * @param chatId - Numeric identifier for the chat whose queue will receive the request
+ * @param message - The request text (used for queue metadata and previews)
+ * @param handler - Function invoked when the request is dequeued; its resolved value becomes the returned result
+ * @returns The value produced by `handler` when the queued request is executed
+ */
 export async function queueRequest<T>(
   chatId: number,
   message: string,
@@ -78,6 +86,11 @@ export async function queueRequest<T>(
   });
 }
 
+/**
+ * Processes the next queued request for the given chat, invoking its handler and resolving or rejecting that request's promise; emits queue lifecycle events and performs per-chat cleanup (abort controller, active query, cancelled flag).
+ *
+ * @returns Nothing.
+ */
 async function processQueue(chatId: number): Promise<void> {
   if (processingFlags.get(chatId)) {
     return;

@@ -71,6 +71,11 @@ function ensureUrl(token: string): string | null {
   return url;
 }
 
+/**
+ * Determines whether a hostname refers to Reddit (including reddit.com subdomains and redd.it).
+ *
+ * @returns `true` if `hostname` is `reddit.com`, a subdomain of `reddit.com`, or `redd.it`, `false` otherwise.
+ */
 function isRedditHost(hostname: string): boolean {
   return hostname === 'reddit.com' || hostname.endsWith('.reddit.com') || hostname === 'redd.it';
 }
@@ -88,11 +93,23 @@ const EXTERNAL_VIDEO_HOSTS = [
   'x.com',
 ];
 
+/**
+ * Determines whether a hostname belongs to one of the configured external video hosts.
+ *
+ * @param hostname - The hostname to check (case-insensitive).
+ * @returns `true` if `hostname` exactly matches or is a subdomain of an entry in `EXTERNAL_VIDEO_HOSTS`, `false` otherwise.
+ */
 function isExternalVideoHost(hostname: string): boolean {
   const h = hostname.toLowerCase();
   return EXTERNAL_VIDEO_HOSTS.some(host => h === host || h.endsWith('.' + host));
 }
 
+/**
+ * Extracts the media identifier from a v.redd.it URL.
+ *
+ * @param url - The URL object to inspect
+ * @returns The v.redd.it media identifier if present, `null` otherwise
+ */
 function extractVRedditIdFromUrl(url: URL): string | null {
   if (url.hostname !== 'v.redd.it') return null;
   const parts = url.pathname.replace(/^\/+/, '').split('/');
@@ -496,6 +513,14 @@ function getUrlExtension(urlString: string, fallback: string): string {
   }
 }
 
+/**
+ * Determine the video source for a given user input (direct URL, post URL, or raw token).
+ *
+ * Tries to interpret the input as a DASH manifest URL, a v.redd.it asset, an external video host, or a Reddit post that embeds video. For Reddit post URLs the function resolves redirects, fetches the post HTML, and extracts either a DASH playlist URL or an external embed URL.
+ *
+ * @param input - User-provided text, URL, or token that may identify a video
+ * @returns An object describing the resolved video source (`{ type: 'dash' | 'external'; url: string }`), or `null` if no downloadable video source could be determined
+ */
 async function resolveVideoSource(input: string): Promise<VideoSource> {
   const token = normalizeInput(input);
   console.log(`[vReddit] Input: "${input}" → token: "${token}"`);
@@ -580,9 +605,18 @@ async function resolveVideoSource(input: string): Promise<VideoSource> {
 }
 
 /**
- * Platform-agnostic Reddit video download pipeline.
- * Resolves the video source, downloads, merges audio, and compresses if needed.
- * Caller is responsible for sending the file and cleaning up tempDir.
+ * Download a Reddit-hosted or externally embedded video, merge audio if present, and compress as needed to fit the size limit.
+ *
+ * Resolves the video source from `input`, downloads the appropriate streams (DASH for Reddit-hosted or yt-dlp for external embeds), merges video and audio when available, and attempts CRF then two-pass compression if the result exceeds `maxSizeMB`. The returned `tempDir` contains the final file and intermediate files; the caller is responsible for sending the file and removing `tempDir`.
+ *
+ * @param input - A Reddit link, shortened ID, or external video URL/token to resolve and download
+ * @param maxSizeMB - Maximum allowed size for the final video in megabytes
+ * @param onProgress - Optional callback invoked with short progress messages
+ * @returns An object with:
+ *  - `filePath`: filesystem path to the final video file
+ *  - `size`: size of the final file in bytes
+ *  - `tempDir`: path to the temporary directory containing the file and any intermediates
+ * @throws Error if no downloadable video is found or if the video cannot be reduced to fit the size limit
  */
 export async function downloadRedditVideo(
   input: string,
@@ -708,6 +742,12 @@ export async function downloadRedditVideo(
   }
 }
 
+/**
+ * Handle a vReddit request: download a Reddit or external video, upload it to Telegram, and remove temporary files.
+ *
+ * @param ctx - Telegram context used for sending acknowledgements, progress updates, and the final video
+ * @param input - User-provided token (URL, reddit post id, or similar) used to resolve and download the video
+ */
 export async function executeVReddit(ctx: Context, input: string): Promise<void> {
   let ackMsg: { message_id: number } | null = null;
   let tempDir: string | null = null;

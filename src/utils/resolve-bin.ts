@@ -6,6 +6,15 @@ import * as path from 'path';
 const cache = new Map<string, string>();
 const isWin = process.platform === 'win32';
 
+/**
+ * Provide a platform-specific ordered list of directories to search for binaries.
+ *
+ * The returned list is tailored to the current platform (Windows, macOS, or other Unix-like systems)
+ * and includes common install locations such as Scoop/WinGet/Chocolatey paths on Windows,
+ * Homebrew and system bins on macOS, and user/local bin paths on Linux-like systems.
+ *
+ * @returns An ordered array of absolute directory paths appropriate for the current platform.
+ */
 function getSearchDirs(): string[] {
   const home = os.homedir();
 
@@ -38,9 +47,13 @@ function getSearchDirs(): string[] {
 const SEARCH_DIRS = getSearchDirs();
 
 /**
- * Resolve a binary name to its full path.
- * Checks platform-specific install locations so execFile works under
- * systemd, launchd, and other environments with minimal PATH.
+ * Resolve a program name to an executable path available on the system.
+ *
+ * Attempts to locate the named binary using the system lookup (e.g., `which`/`where`), then by checking platform-specific installation directories, and caches the first successful result. If no path is found, returns the original `name` so the caller can rely on PATH resolution.
+ *
+ * @param name - The binary name to resolve; must not contain path separators, `..`, or null bytes.
+ * @returns The filesystem path to the resolved executable, or the original `name` if no explicit path was found.
+ * @throws Error if `name` contains '/', '\\', '..', or a null character.
  */
 export function resolveBin(name: string): string {
   // Reject names with path separators to prevent traversal

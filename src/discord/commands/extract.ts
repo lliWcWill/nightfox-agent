@@ -40,7 +40,12 @@ import {
 } from '../project-browser.js';
 
 const COLLECTOR_TIMEOUT_MS = 5 * 60 * 1000;
-const EXTRACT_BROWSER_PREFIX = 'extproj'; // unique prefix to avoid collision with /project
+const EXTRACT_BROWSER_PREFIX = 'extproj'; /**
+ * Maps a platform identifier to a platform-specific emoji.
+ *
+ * @param platform - The platform identifier; expected values include `'youtube'`, `'instagram'`, and `'tiktok'`
+ * @returns The emoji string for the given platform, or a link icon emoji when the platform is unrecognized
+ */
 
 function platformEmoji(platform: string): string {
   switch (platform) {
@@ -51,11 +56,24 @@ function platformEmoji(platform: string): string {
   }
 }
 
+/**
+ * Create a filesystem-safe filename from a title.
+ *
+ * @param title - The original title to convert into a safe filename
+ * @returns The sanitized filename where characters not allowed in filenames are replaced with underscores and the result is truncated to 40 characters
+ */
 function safeFileName(title: string): string {
   return title.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
 }
 
-/** Compress video with ffmpeg to fit Discord upload limit. Returns new path or null. */
+/**
+ * Compresses a video to fit within a target size and writes the result to the specified output directory.
+ *
+ * @param inputPath - Path to the source video file.
+ * @param outputDir - Directory where the compressed file will be created.
+ * @param maxSizeMB - Maximum allowed file size in megabytes for the compressed output.
+ * @returns The path to the compressed file if compression succeeds, or `null` if compression fails or the output file is not produced.
+ */
 function compressVideo(inputPath: string, outputDir: string, maxSizeMB: number): Promise<string | null> {
   return new Promise((resolve) => {
     const outPath = path.join(outputDir, 'compressed.mp4');
@@ -78,7 +96,11 @@ function compressVideo(inputPath: string, outputDir: string, maxSizeMB: number):
   });
 }
 
-/** Build disabled button rows for after selection */
+/**
+ * Create two action rows of disabled mode-selection buttons for the post-selection UI state.
+ *
+ * @returns A tuple where the first element is an action row containing the Text, Audio, and Video buttons (all disabled), and the second element is an action row containing the All and All + Chat buttons (all disabled).
+ */
 function disabledRows(): [ActionRowBuilder<ButtonBuilder>, ActionRowBuilder<ButtonBuilder>] {
   const r1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId('extract-text').setLabel('\u{1F4DD} Text').setStyle(ButtonStyle.Primary).setDisabled(true),
@@ -92,7 +114,14 @@ function disabledRows(): [ActionRowBuilder<ButtonBuilder>, ActionRowBuilder<Butt
   return [r1, r2];
 }
 
-/** Compress audio with ffmpeg to fit within a size limit. Returns new path or null. */
+/**
+ * Compresses an audio file with ffmpeg to produce an MP3 that does not exceed a given size.
+ *
+ * @param inputPath - Filesystem path to the source audio file
+ * @param outputDir - Directory where the compressed file will be written
+ * @param maxSizeMB - Maximum allowed output file size in megabytes
+ * @returns Path to the compressed MP3 if successful, `null` on error or if the output file is not created
+ */
 function compressAudio(inputPath: string, outputDir: string, maxSizeMB: number): Promise<string | null> {
   return new Promise((resolve) => {
     const outPath = path.join(outputDir, 'compressed.mp3');
@@ -113,7 +142,15 @@ function compressAudio(inputPath: string, outputDir: string, maxSizeMB: number):
 
 const DISCORD_MAX_UPLOAD_MB = 25; // free-tier per-file limit
 
-/** Send media files to a channel or as interaction follow-ups */
+/**
+ * Deliver extracted media (video, audio, transcript, subtitles) to a channel or interaction follow-up according to the requested mode.
+ *
+ * Sends video, audio, and text outputs based on `mode`. Videos and audio are checked against size limits and will be re-encoded to meet limits when possible; transcripts under 2000 characters are posted inline, otherwise sent as a text file; subtitles are sent as a file. Sending is attempted via the provided `sender` (if present) or the `interaction` follow-up, and upload failures trigger a user-facing warning message when possible.
+ *
+ * @param result - Extraction result containing fields used for delivery (e.g., `videoPath`, `audioPath`, `transcript`, `subtitlePath`, `subtitleFormat`, `title`)
+ * @param mode - Desired output mode: `'text'`, `'audio'`, `'video'`, `'all'`, or `'all_chat'`
+ * @param maxVideoMB - Maximum allowed video size in megabytes for direct upload; videos larger than this will be re-encoded attempting to fit this limit
+ */
 async function sendMediaFiles(
   result: ExtractResult,
   mode: ExtractMode,
@@ -226,8 +263,13 @@ async function sendMediaFiles(
 }
 
 /**
- * Show an ephemeral directory picker and wait for the user to select a project.
- * Returns the chosen directory path, or null if they timed out / cancelled.
+ * Present an ephemeral directory browser allowing the command user to choose a project directory.
+ *
+ * Shows an interactive, paginated directory picker (with manual-path modal), stores the selected project for the chat when confirmed, and closes the UI.
+ *
+ * @param interaction - The originating command interaction used to send the ephemeral picker UI
+ * @param chatId - Numeric chat identifier used to persist the chosen project for the chat
+ * @returns The chosen directory path as a string, or `null` if the user cancelled or the picker timed out
  */
 async function promptProjectPicker(
   interaction: ChatInputCommandInteraction,
@@ -372,8 +414,17 @@ async function promptProjectPicker(
 }
 
 /**
- * Run the full All + Chat extraction flow:
- * extract → create thread → post media → stream Claude response.
+ * Run the full All + Chat extraction workflow: extract media, post results to a thread, and stream an AI assistant response.
+ *
+ * Performs extraction for the provided URL in "all + chat" mode, creates a thread in the invoking channel, posts extracted media (video, audio, transcript, subtitles) into that thread, and streams a conversational AI (Claude) response driven by the transcript into the thread.
+ *
+ * @param interaction - The originating chat input interaction to update and follow up in
+ * @param url - The source URL to extract from
+ * @param emoji - Platform emoji used in embeds and thread headers
+ * @param label - Human-readable platform label used in footers and metadata
+ * @param displayUrl - A display-friendly form of the URL used in embeds
+ * @param maxVideoMB - Maximum allowed video file size in megabytes for uploads; used to decide compression or warnings
+ * @param chatId - Identifier for the user's chat session used when queueing and routing the assistant request
  */
 async function runAllChatExtraction(
   interaction: ChatInputCommandInteraction,
@@ -516,6 +567,14 @@ async function runAllChatExtraction(
   }
 }
 
+/**
+ * Handle the /extract slash command flow for extracting media and transcripts from a provided URL.
+ *
+ * Presents an interactive mode picker (Text, Audio, Video, All, All + Chat), validates the URL,
+ * coordinates project selection for the All + Chat mode when required, streams extraction progress
+ * to the user, posts extracted media and transcripts to the channel (or thread), and surfaces
+ * errors or warnings to the user. Cleans up temporary extraction artifacts on completion.
+ */
 export async function handleExtract(interaction: ChatInputCommandInteraction): Promise<void> {
   const url = interaction.options.getString('url', true);
 
