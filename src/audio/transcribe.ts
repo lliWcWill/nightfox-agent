@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { config } from '../config.js';
 import { downloadFileSecure, getTelegramFileUrl } from '../utils/download.js';
+import { getProxyDispatcher } from '../utils/proxy.js';
 
 const GROQ_WHISPER_ENDPOINT = 'https://api.groq.com/openai/v1/audio/transcriptions';
 const GROQ_WHISPER_MODEL = 'whisper-large-v3-turbo';
@@ -14,8 +15,32 @@ export interface TranscribeOptions {
 }
 
 /**
- * Transcribe an audio file using the Groq Whisper API directly via fetch.
- * No Python subprocess - much faster, especially on first call.
+ * Constructs the FormData payload for a Groq Whisper transcription request.
+ *
+ * @param fileBuffer - The audio file contents as a Buffer to be uploaded
+ * @param fileName - The filename to send for the uploaded audio file
+ * @returns A FormData instance containing the `file`, `model`, `language`, and `response_format` fields required by the Whisper API
+ */
+function buildFormData(fileBuffer: Buffer, fileName: string): FormData {
+  const formData = new FormData();
+  formData.append('file', new Blob([fileBuffer]), fileName);
+  formData.append('model', GROQ_WHISPER_MODEL);
+  formData.append('language', config.VOICE_LANGUAGE);
+  formData.append('response_format', 'json');
+  return formData;
+}
+
+/**
+ * Transcribes a local audio file using the Groq Whisper API, retrying through a residential proxy on 403 when proxying is enabled.
+ *
+ * @param filePath - Filesystem path to the audio file to transcribe
+ * @param options - Optional transcription settings
+ * @param options.timeoutMs - Maximum time in milliseconds to wait for the API response (defaults to config.VOICE_TIMEOUT_MS)
+ * @param options.allowEmpty - If true, returns an empty string when the transcription is empty instead of throwing
+ * @returns The trimmed transcription text
+ * @throws If GROQ_API_KEY is not configured
+ * @throws When the Groq Whisper API responds with a non-OK status (error includes status and up to 300 chars of body)
+ * @throws If the transcription is empty and `options.allowEmpty` is not true
  */
 export async function transcribeFile(filePath: string, options?: TranscribeOptions): Promise<string> {
   if (!config.GROQ_API_KEY) {
@@ -26,20 +51,37 @@ export async function transcribeFile(filePath: string, options?: TranscribeOptio
   const fileBuffer = fs.readFileSync(filePath);
   const fileName = path.basename(filePath);
 
-  const formData = new FormData();
-  formData.append('file', new Blob([fileBuffer]), fileName);
-  formData.append('model', GROQ_WHISPER_MODEL);
-  formData.append('language', config.VOICE_LANGUAGE);
-  formData.append('response_format', 'json');
+  // First attempt — direct connection
+  const formData = buildFormData(fileBuffer, fileName);
 
-  const response = await fetch(GROQ_WHISPER_ENDPOINT, {
+  const fetchOptions: RequestInit = {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.GROQ_API_KEY}`,
     },
     body: formData,
     signal: AbortSignal.timeout(timeoutMs),
-  });
+  };
+
+  let response = await fetch(GROQ_WHISPER_ENDPOINT, fetchOptions);
+
+  // On 403, retry through residential proxy
+  if (response.status === 403 && config.VOICE_PROXY_ENABLED) {
+    const dispatcher = getProxyDispatcher();
+    if (dispatcher) {
+      console.log('[Transcribe] Got 403 — retrying through residential proxy');
+      const retryFormData = buildFormData(fileBuffer, fileName);
+      response = await fetch(GROQ_WHISPER_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.GROQ_API_KEY}`,
+        },
+        body: retryFormData,
+        signal: AbortSignal.timeout(timeoutMs),
+        dispatcher,
+      } as RequestInit);
+    }
+  }
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');

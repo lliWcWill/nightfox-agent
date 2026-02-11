@@ -2515,6 +2515,15 @@ export async function handleExtract(ctx: Context): Promise<void> {
   await showExtractMenu(ctx, args);
 }
 
+/**
+ * Present an extraction options menu for a media URL and cache the URL for subsequent callback handling.
+ *
+ * Validates the supplied URL and platform; if valid, stores the URL for the chat and sends an inline keyboard
+ * offering Text, Audio, Video, All, and All + Chat extraction options. Sends user-facing errors for invalid
+ * URLs or unsupported platforms.
+ *
+ * @param url - The media URL to validate and present extraction options for
+ */
 export async function showExtractMenu(ctx: Context, url: string): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
@@ -2555,12 +2564,22 @@ export async function showExtractMenu(ctx: Context, url: string): Promise<void> 
             { text: '\u{1F3AC} Video', callback_data: 'extract:video' },
             { text: '\u{2728} All', callback_data: 'extract:all' },
           ],
+          [
+            { text: '\u{1F4AC} All + Chat', callback_data: 'extract:all_chat' },
+          ],
         ],
       },
     }
   );
 }
 
+/**
+ * Handle an inline callback from the extract flow, routing user selections to the appropriate extraction action.
+ *
+ * Processes callback data for extraction modes and subtitle-format choices, validates session state, clears pending URL state, removes the inline menu, and invokes the extraction pipeline (including the new `all_chat` mode).
+ *
+ * @param ctx - Telegram callback context containing the callback query and chat information
+ */
 export async function handleExtractCallback(ctx: Context): Promise<void> {
   const data = ctx.callbackQuery?.data;
   const chatId = ctx.chat?.id;
@@ -2596,7 +2615,7 @@ export async function handleExtractCallback(ctx: Context): Promise<void> {
   }
 
   const mode = data.replace('extract:', '') as ExtractMode;
-  if (!['text', 'audio', 'video', 'all'].includes(mode)) return;
+  if (!['text', 'audio', 'video', 'all', 'all_chat'].includes(mode)) return;
 
   await ctx.answerCallbackQuery();
 
@@ -2669,6 +2688,16 @@ export async function handleExtractCallback(ctx: Context): Promise<void> {
   await executeExtract(ctx, url, mode);
 }
 
+/**
+ * Extracts media or text from a URL, delivers extracted artifacts to the chat, and optionally injects the transcript into the active project conversation.
+ *
+ * Performs the extraction with progress updates, sends video/audio/subtitle/transcript outputs (as messages or attachments), posts warning messages, and cleans up temporary files. When `mode` is `'all_chat'` the function will, after delivering files, attempt to stream the transcript and context into the active project session's agent; if no project session exists the user is informed. Errors are reported back to the chat and internal extraction artifacts are removed on completion.
+ *
+ * @param ctx - Telegram context used to send messages and edit the in-chat acknowledgement
+ * @param url - The remote resource URL to extract from
+ * @param mode - Extraction mode; one of `'text'`, `'audio'`, `'video'`, `'all'`, or `'all_chat'` (the last option also sends the transcript/context to the active project agent)
+ * @param subtitleFormat - Optional subtitle output format to request (`'srt'` or `'vtt'`), when applicable
+ */
 export async function executeExtract(ctx: Context, url: string, mode: ExtractMode, subtitleFormat?: SubtitleFormat): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
@@ -2726,7 +2755,7 @@ export async function executeExtract(ctx: Context, url: string, mode: ExtractMod
     }
 
     // Send audio if requested (and not already handled by video)
-    if (result.audioPath && fs.existsSync(result.audioPath) && (mode === 'audio' || mode === 'all')) {
+    if (result.audioPath && fs.existsSync(result.audioPath) && (mode === 'audio' || mode === 'all' || mode === 'all_chat')) {
       try {
         await ctx.replyWithChatAction('upload_voice');
         await ctx.replyWithAudio(new InputFile(result.audioPath), {
@@ -2778,7 +2807,7 @@ export async function executeExtract(ctx: Context, url: string, mode: ExtractMod
           }
         }
       }
-    } else if ((mode === 'text' || mode === 'all') && !result.subtitlePath) {
+    } else if ((mode === 'text' || mode === 'all' || mode === 'all_chat') && !result.subtitlePath) {
       // Transcript was expected but empty and no subtitle file was sent either
       await ctx.reply('\u{26A0}\u{FE0F} No speech detected in the audio.', { parse_mode: undefined });
     }
@@ -2791,6 +2820,56 @@ export async function executeExtract(ctx: Context, url: string, mode: ExtractMod
     // Success summary for non-text modes when no transcript was sent
     if (mode !== 'text' && !result.transcript) {
       await ctx.reply(header, { parse_mode: 'MarkdownV2' });
+    }
+
+    // ── All + Chat: inject transcript + URL into agent conversation ──
+    if (mode === 'all_chat' && chatId) {
+      const hasSession = sessionManager.getSession(chatId);
+      if (!hasSession) {
+        await ctx.reply(
+          '\u{26A0}\u{FE0F} No project set — use `/project` first to chat about extracted content\\.',
+          { parse_mode: 'MarkdownV2' }
+        );
+      } else {
+        const transcriptText = result.transcript || '(No transcript available)';
+        const contextMessage =
+          `[Extract Context — All + Chat]\n` +
+          `Platform: ${platformLabel(result.platform)}\n` +
+          `Title: ${result.title}\n` +
+          `URL: ${url}\n` +
+          `Duration: ${result.duration ? `${Math.floor(result.duration / 60)}:${String(Math.floor(result.duration % 60)).padStart(2, '0')}` : 'unknown'}\n\n` +
+          `--- TRANSCRIPT ---\n${transcriptText}\n--- END TRANSCRIPT ---\n\n` +
+          `The user extracted this content and wants to discuss it with you. ` +
+          `You have the full transcript above. Acknowledge that you have the context and ask what they'd like to discuss.`;
+
+        try {
+          await messageSender.startStreaming(ctx);
+          const abortController = new AbortController();
+          setAbortController(chatId, abortController);
+
+          const response = await sendToAgent(chatId, contextMessage, {
+            onProgress: (progressText) => {
+              messageSender.updateStream(ctx, progressText);
+            },
+            onToolStart: (toolName, input) => {
+              messageSender.updateToolOperation(chatId, toolName, input);
+            },
+            onToolEnd: () => {
+              messageSender.clearToolOperation(chatId);
+            },
+            abortController,
+          });
+
+          await messageSender.finishStreaming(ctx, response.text);
+        } catch (chatError) {
+          await messageSender.cancelStreaming(ctx);
+          console.error('[extract] All+Chat agent error:', sanitizeError(chatError));
+          await ctx.reply(
+            '\u{26A0}\u{FE0F} Media extracted, but failed to send context to the agent\\.',
+            { parse_mode: 'MarkdownV2' }
+          );
+        }
+      }
     }
 
   } catch (error) {

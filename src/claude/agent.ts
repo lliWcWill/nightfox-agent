@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import { sessionManager } from './session-manager.js';
 import { setActiveQuery, clearActiveQuery, isCancelled } from './request-queue.js';
 import { config } from '../config.js';
+import { eventBus } from '../dashboard/event-bus.js';
 
 export interface AgentUsage {
   inputTokens: number;
@@ -39,6 +40,8 @@ interface ConversationMessage {
   content: string;
 }
 
+export type Platform = 'telegram' | 'discord';
+
 interface AgentOptions {
   onProgress?: (text: string) => void;
   onToolStart?: (toolName: string, input?: Record<string, unknown>) => void;
@@ -46,6 +49,7 @@ interface AgentOptions {
   abortController?: AbortController;
   command?: string;
   model?: string;
+  platform?: Platform;
 }
 
 interface LoopOptions extends AgentOptions {
@@ -64,16 +68,80 @@ const chatModels: Map<number, string> = new Map();
 // Cache latest usage per chat for /context and /status commands
 const chatUsageCache: Map<number, AgentUsage> = new Map();
 
+/**
+ * Retrieve the cached usage metrics for a chat session.
+ *
+ * @param chatId - The numeric chat identifier
+ * @returns The cached `AgentUsage` for `chatId`, or `undefined` if no cached entry exists
+ */
 export function getCachedUsage(chatId: number): AgentUsage | undefined {
   return chatUsageCache.get(chatId);
 }
 
-const BASE_SYSTEM_PROMPT = `You are ${config.BOT_NAME}, an AI assistant helping via Telegram.
+/**
+ * Builds the assistant's base system prompt tailored to the target platform.
+ *
+ * The prompt includes general assistant guidelines, platform-specific response-formatting
+ * constraints (Discord or Telegraph/Telegram), alternatives to markdown tables, and
+ * a brief Reddit tool usage section.
+ *
+ * @param platform - Target platform shaping formatting and rendering rules; defaults to 'telegram'
+ * @returns The full system prompt string appropriate for the specified platform
+ */
+function getBaseSystemPrompt(platform: Platform = 'telegram'): string {
+  const commonGuidelines = `You are ${config.BOT_NAME}, an AI assistant.
 
 Guidelines:
 - Show relevant code snippets when helpful, but keep them short
 - If a task requires multiple steps, execute them and summarize what you did
-- When you can't do something, explain why briefly
+- When you can't do something, explain why briefly`;
+
+  if (platform === 'discord') {
+    return `${commonGuidelines}
+
+Response Formatting — Discord:
+Your responses are displayed in Discord. Use standard markdown.
+
+Discord supports:
+- Headings: # h1, ## h2, ### h3
+- Text formatting: **bold**, *italic*, ~~strikethrough~~, \`inline code\`, __underline__
+- Links: URLs auto-embed, [text](url) for masked links
+- Lists: unordered (- item) and ordered (1. item)
+- Code blocks: \`\`\`lang\\ncode\`\`\` with syntax highlighting
+- Blockquotes: > text, >>> multi-line blockquote
+- Spoiler tags: ||hidden text||
+
+Discord does NOT support:
+- TABLES — pipe-delimited markdown tables (|col|col|) will NOT render. They show as ugly raw text. NEVER use markdown tables.
+
+Instead of tables, use these alternatives (in order of preference):
+
+1. ANSI-colored code block tables — best for tabular/CSV-like data with rows and columns:
+   \`\`\`ansi
+   \\u001b[1;33m Name          Age   City      \\u001b[0m
+   \\u001b[0;36m──────────────────────────────\\u001b[0m
+    Alice          30    NYC
+    Bob            25    London
+    Charlie        35    Tokyo
+   \`\`\`
+   Use \\u001b[1;33m for bold yellow headers, \\u001b[0;36m for cyan separators, \\u001b[0m to reset.
+   Always pad columns with spaces so they align in monospace.
+
+2. Bullet lists with bold labels — best for key-value pairs (not multi-row data):
+   - **Name**: Alice
+   - **Age**: 30
+   - **City**: NYC
+
+3. Nested lists — best for grouped/categorized data:
+   - **Frontend**
+     - React 18
+     - TypeScript
+
+Keep responses concise. Messages over ~4000 chars will be split across multiple embeds.
+Use code blocks with language tags for syntax highlighting.`;
+  }
+
+  return `${commonGuidelines}
 
 Response Formatting — Telegraph-Aware Writing:
 Your responses are displayed via Telegram. Short responses render inline as MarkdownV2.
@@ -149,6 +217,7 @@ Semantic mappings for natural language Reddit queries:
 - "this week" → --sort top --time week
 - "this month" → --sort top --time month
 - "rising" → --sort rising`;
+}
 
 const REDDIT_VIDEO_TOOL_PROMPT = `
 
@@ -167,12 +236,14 @@ const EXTRACT_TOOL_PROMPT = `
 
 Media Extract Tool:
 The user can extract text transcripts, audio, or video from YouTube, Instagram, and TikTok URLs using the /extract Telegram command.
-Usage: /extract <url> — shows a menu to pick: Text, Audio, Video, or All.
+Usage: /extract <url> — shows a menu to pick: Text, Audio, Video, All, or All + Chat.
 - Text: Downloads audio, transcribes via Groq Whisper, returns transcript
 - Audio: Downloads and sends the audio file (MP3)
 - Video: Downloads and sends the video file (MP4, if under 50MB)
 - All: Returns transcript + audio + video
+- All + Chat: Same as All, but also injects the transcript and URL into your conversation so you have full context to discuss the content
 If the user asks you to transcribe a YouTube/Instagram/TikTok video, tell them to use /extract with the URL.
+When you receive an "[Extract Context — All + Chat]" message, it means the user used All + Chat mode. You have the full transcript — acknowledge it and be ready to discuss.
 For voice notes sent directly in chat, use /transcribe instead.`;
 
 const REASONING_SUMMARY_INSTRUCTIONS = `
@@ -183,7 +254,28 @@ Reasoning Summary (required when enabled):
 - Do NOT reveal chain-of-thought, hidden reasoning, or sensitive tool outputs.
 - Skip the summary for very short acknowledgements or pure error messages.`;
 
-const SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}${REDDIT_VIDEO_TOOL_PROMPT}${MEDIUM_TOOL_PROMPT}${EXTRACT_TOOL_PROMPT}${config.CLAUDE_REASONING_SUMMARY ? REASONING_SUMMARY_INSTRUCTIONS : ''}`;
+/**
+ * Builds the assistant system prompt tailored to the target platform.
+ *
+ * For `discord`, the prompt is the platform-specific base prompt optionally
+ * extended with the configured reasoning-summary instructions. For other
+ * platforms (default `telegram`), the prompt includes the base prompt plus
+ * Reddit, Medium, and media-extraction tool prompts and, if enabled in
+ * configuration, the reasoning-summary instructions.
+ *
+ * @param platform - The target platform to tailor the prompt for; defaults to `'telegram'`.
+ * @returns The assembled system prompt string appropriate for the given platform.
+ */
+function getSystemPrompt(platform: Platform = 'telegram'): string {
+  const base = getBaseSystemPrompt(platform);
+
+  if (platform === 'discord') {
+    // Discord prompt: no Telegram-specific tool prompts
+    return `${base}${config.CLAUDE_REASONING_SUMMARY ? REASONING_SUMMARY_INSTRUCTIONS : ''}`;
+  }
+
+  return `${base}${REDDIT_VIDEO_TOOL_PROMPT}${MEDIUM_TOOL_PROMPT}${EXTRACT_TOOL_PROMPT}${config.CLAUDE_REASONING_SUMMARY ? REASONING_SUMMARY_INSTRUCTIONS : ''}`;
+}
 
 /**
  * Strip the "Reasoning Summary" section from the end of a response
@@ -233,12 +325,38 @@ function getPermissionMode(command?: string): PermissionMode {
   return 'acceptEdits';
 }
 
+/**
+ * Send a prompt to the Claude agent for a chat and return the aggregated response and metadata.
+ *
+ * Sends the given message to the agent using the chat's session and working directory, streams progress
+ * via callbacks, records tool usage and session/compaction events, updates conversation history and usage cache,
+ * and emits lifecycle events on the event bus.
+ *
+ * @param chatId - Numeric identifier for the chat/conversation
+ * @param message - The user prompt to send to the agent
+ * @param options - Optional settings and callbacks:
+ *   - onProgress: called with progressively accumulated assistant text
+ *   - onToolStart: called when the agent begins a tool run; receives (toolName, input)
+ *   - onToolEnd: called when a tool run completes (summary may be provided separately)
+ *   - abortController: controller to cancel the in-flight request
+ *   - command: special command context (e.g., 'explore') that can modify prompt/permissions
+ *   - model: override model identifier to use for this request
+ *   - platform: platform hint ('telegram' | 'discord') used to assemble the system prompt
+ * @returns The agent response object containing:
+ *   - `text`: assistant response with internal Reasoning Summary removed when applicable
+ *   - `toolsUsed`: ordered list of tool names observed during the request
+ *   - `usage`: optional usage metrics extracted from the agent result
+ *   - `compaction`: optional compaction event metadata if compaction was signaled
+ *   - `sessionInit`: optional session initialization metadata observed from the agent
+ * @throws Error when there is no active session for the chat (use /project to set working directory)
+ * @throws Error when the agent request fails (emitted as an `agent:error` event prior to throwing)
+ */
 export async function sendToAgent(
   chatId: number,
   message: string,
   options: AgentOptions = {}
 ): Promise<AgentResponse> {
-  const { onProgress, onToolStart, onToolEnd, abortController, command, model } = options;
+  const { onProgress, onToolStart, onToolEnd, abortController, command, model, platform } = options;
 
   const session = sessionManager.getSession(chatId);
 
@@ -269,6 +387,7 @@ export async function sendToAgent(
   let resultUsage: AgentUsage | undefined;
   let compactionEvent: { trigger: 'manual' | 'auto'; preTokens: number } | undefined;
   let initEvent: { model: string; sessionId: string } | undefined;
+  let agentStartTime = Date.now();
 
   // Determine permission mode
   const permissionMode = getPermissionMode(command);
@@ -388,7 +507,7 @@ export async function sendToAgent(
       systemPrompt: {
         type: 'preset' as const,
         preset: 'claude_code' as const,
-        append: SYSTEM_PROMPT,
+        append: getSystemPrompt(platform),
       },
       settingSources: ['project', 'user'] as SettingSource[],
       model: effectiveModel,
@@ -401,6 +520,15 @@ export async function sendToAgent(
         console.error('[Claude stderr]:', data);
       },
     };
+
+    agentStartTime = Date.now();
+    eventBus.emit('agent:start', {
+      chatId,
+      model: effectiveModel,
+      prompt: prompt.slice(0, 200),
+      sessionId: existingSessionId,
+      timestamp: agentStartTime,
+    });
 
     const response = query({
       prompt,
@@ -438,6 +566,7 @@ export async function sendToAgent(
                   : '';
             logAt('verbose', `[Claude] Tool: ${block.name}${inputSummary ? ` → ${inputSummary}` : ''}`);
             toolsUsed.push(block.name);
+            eventBus.emit('agent:tool_start', { chatId, toolName: block.name, input: toolInput, timestamp: Date.now() });
             // Notify tool start for terminal UI
             onToolStart?.(block.name, toolInput);
           }
@@ -469,6 +598,7 @@ export async function sendToAgent(
         logAt('verbose', `[Claude] Tool progress: ${responseMessage.tool_name}`, responseMessage);
       } else if (responseMessage.type === 'tool_use_summary') {
         logAt('verbose', '[Claude] Tool use summary', responseMessage);
+        eventBus.emit('agent:tool_end', { chatId, toolName: '', timestamp: Date.now() });
         // Notify tool end for terminal UI (summary doesn't include tool name)
         onToolEnd?.();
       } else if (responseMessage.type === 'auth_status') {
@@ -528,6 +658,13 @@ export async function sendToAgent(
   } catch (error) {
     // If cancelled via /cancel or /reset, return clean message
     if (isCancelled(chatId) || abortController?.signal.aborted) {
+      eventBus.emit('agent:complete', {
+        chatId,
+        text: '✅ Cancelled',
+        toolsUsed,
+        durationMs: Date.now() - agentStartTime,
+        timestamp: Date.now(),
+      });
       return {
         text: '✅ Successfully cancelled - no tools or agents in process.',
         toolsUsed,
@@ -540,6 +677,14 @@ export async function sendToAgent(
     } else {
       console.error('[Claude] Full error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      eventBus.emit('agent:error', { chatId, error: errorMessage, timestamp: Date.now() });
+      eventBus.emit('agent:complete', {
+        chatId,
+        text: '',
+        toolsUsed,
+        durationMs: Date.now() - agentStartTime,
+        timestamp: Date.now(),
+      });
       throw new Error(`Claude error: ${errorMessage}`);
     }
   } finally {
@@ -560,6 +705,15 @@ export async function sendToAgent(
   if (resultUsage) {
     chatUsageCache.set(chatId, resultUsage);
   }
+
+  eventBus.emit('agent:complete', {
+    chatId,
+    text: fullText.slice(0, 500),
+    toolsUsed,
+    usage: resultUsage,
+    durationMs: Date.now() - agentStartTime,
+    timestamp: Date.now(),
+  });
 
   return {
     text: stripReasoningSummary(fullText) || 'No response from Claude.',

@@ -71,10 +71,45 @@ function ensureUrl(token: string): string | null {
   return url;
 }
 
+/**
+ * Determines whether a hostname refers to Reddit (including reddit.com subdomains and redd.it).
+ *
+ * @returns `true` if `hostname` is `reddit.com`, a subdomain of `reddit.com`, or `redd.it`, `false` otherwise.
+ */
 function isRedditHost(hostname: string): boolean {
   return hostname === 'reddit.com' || hostname.endsWith('.reddit.com') || hostname === 'redd.it';
 }
 
+const EXTERNAL_VIDEO_HOSTS = [
+  'redgifs.com',
+  'gfycat.com',
+  'streamable.com',
+  'imgur.com',
+  'youtube.com',
+  'youtu.be',
+  'tiktok.com',
+  'vm.tiktok.com',
+  'twitter.com',
+  'x.com',
+];
+
+/**
+ * Determines whether a hostname belongs to one of the configured external video hosts.
+ *
+ * @param hostname - The hostname to check (case-insensitive).
+ * @returns `true` if `hostname` exactly matches or is a subdomain of an entry in `EXTERNAL_VIDEO_HOSTS`, `false` otherwise.
+ */
+function isExternalVideoHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return EXTERNAL_VIDEO_HOSTS.some(host => h === host || h.endsWith('.' + host));
+}
+
+/**
+ * Extracts the media identifier from a v.redd.it URL.
+ *
+ * @param url - The URL object to inspect
+ * @returns The v.redd.it media identifier if present, `null` otherwise
+ */
 function extractVRedditIdFromUrl(url: URL): string | null {
   if (url.hostname !== 'v.redd.it') return null;
   const parts = url.pathname.replace(/^\/+/, '').split('/');
@@ -478,6 +513,14 @@ function getUrlExtension(urlString: string, fallback: string): string {
   }
 }
 
+/**
+ * Determine the video source for a given user input (direct URL, post URL, or raw token).
+ *
+ * Tries to interpret the input as a DASH manifest URL, a v.redd.it asset, an external video host, or a Reddit post that embeds video. For Reddit post URLs the function resolves redirects, fetches the post HTML, and extracts either a DASH playlist URL or an external embed URL.
+ *
+ * @param input - User-provided text, URL, or token that may identify a video
+ * @returns An object describing the resolved video source (`{ type: 'dash' | 'external'; url: string }`), or `null` if no downloadable video source could be determined
+ */
 async function resolveVideoSource(input: string): Promise<VideoSource> {
   const token = normalizeInput(input);
   console.log(`[vReddit] Input: "${input}" → token: "${token}"`);
@@ -508,6 +551,11 @@ async function resolveVideoSource(input: string): Promise<VideoSource> {
   }
 
   if (!isRedditHost(parsed.hostname)) {
+    // Known external video hosts — route to yt-dlp directly
+    if (isExternalVideoHost(parsed.hostname)) {
+      console.log(`[vReddit] External video host detected: ${parsed.hostname} — routing to yt-dlp`);
+      return { type: 'external', url: candidateUrl };
+    }
     console.log(`[vReddit] Not a Reddit host: ${parsed.hostname}`);
     return null;
   }
@@ -556,33 +604,45 @@ async function resolveVideoSource(input: string): Promise<VideoSource> {
   return null;
 }
 
-export async function executeVReddit(ctx: Context, input: string): Promise<void> {
-  const maxVideoBytes = config.REDDIT_VIDEO_MAX_SIZE_MB * 1024 * 1024;
-  let tempDir: string | null = null;
-  let ackMsg: { message_id: number } | null = null;
+/**
+ * Download a Reddit-hosted or externally embedded video, merge audio if present, and compress as needed to fit the size limit.
+ *
+ * Resolves the video source from `input`, downloads the appropriate streams (DASH for Reddit-hosted or yt-dlp for external embeds), merges video and audio when available, and attempts CRF then two-pass compression if the result exceeds `maxSizeMB`. The returned `tempDir` contains the final file and intermediate files; the caller is responsible for sending the file and removing `tempDir`.
+ *
+ * @param input - A Reddit link, shortened ID, or external video URL/token to resolve and download
+ * @param maxSizeMB - Maximum allowed size for the final video in megabytes
+ * @param onProgress - Optional callback invoked with short progress messages
+ * @returns An object with:
+ *  - `filePath`: filesystem path to the final video file
+ *  - `size`: size of the final file in bytes
+ *  - `tempDir`: path to the temporary directory containing the file and any intermediates
+ * @throws Error if no downloadable video is found or if the video cannot be reduced to fit the size limit
+ */
+export async function downloadRedditVideo(
+  input: string,
+  maxSizeMB: number,
+  onProgress?: (msg: string) => void,
+): Promise<{ filePath: string; size: number; tempDir: string }> {
+  const maxVideoBytes = maxSizeMB * 1024 * 1024;
+
+  const source = await resolveVideoSource(input);
+  if (!source) {
+    throw new Error('No video found in that link.');
+  }
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claudegram-vreddit-'));
+
+  let finalPath: string;
+  let finalSize: number;
 
   try {
-    ackMsg = await ctx.reply('🎬 Downloading Reddit video...', { parse_mode: undefined });
-
-    const source = await resolveVideoSource(input);
-    if (!source) {
-      await replyMd(ctx, '❌ No video found in that link\\.');
-      return;
-    }
-
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claudegram-vreddit-'));
-
-    let finalPath: string;
-    let finalSize: number;
-
     if (source.type === 'dash') {
       // === DASH pipeline (Reddit-hosted video) ===
       console.log(`[vReddit] Parsing DASH manifest: ${source.url}`);
       const streams = await parseDashManifest(source.url);
       if (!streams?.videoUrl) {
         console.log('[vReddit] No video stream found in DASH manifest');
-        await replyMd(ctx, '❌ Failed to locate a downloadable video stream\\.');
-        return;
+        throw new Error('Failed to locate a downloadable video stream.');
       }
       console.log(`[vReddit] Video stream: ${streams.videoUrl}`);
       if (streams.audioUrl) console.log(`[vReddit] Audio stream: ${streams.audioUrl}`);
@@ -623,13 +683,7 @@ export async function executeVReddit(ctx: Context, input: string): Promise<void>
         domain = 'external site';
       }
       console.log(`[vReddit] Downloading external video via yt-dlp: ${source.url}`);
-      if (ackMsg && ctx.chat?.id) {
-        try {
-          await ctx.api.editMessageText(ctx.chat.id, ackMsg.message_id, `🎬 Downloading video from ${domain}...`);
-        } catch {
-          // ignore edit errors
-        }
-      }
+      onProgress?.(`Downloading video from ${domain}...`);
 
       const ytdlpPath = path.join(tempDir, 'video_ytdlp.mp4');
       finalSize = await downloadWithYtDlp(source.url, ytdlpPath);
@@ -639,7 +693,6 @@ export async function executeVReddit(ctx: Context, input: string): Promise<void>
 
     if (finalSize > maxVideoBytes) {
       // Save the original uncompressed video to a temp directory for later retrieval
-      // Uses OS temp directory rather than hardcoded paths
       const timestamp = Date.now();
       const savedDir = path.join(os.tmpdir(), 'claudegram-vreddit-originals');
       try {
@@ -651,55 +704,77 @@ export async function executeVReddit(ctx: Context, input: string): Promise<void>
         console.warn('[vReddit] Failed to save original to temp:', saveError);
       }
 
-      // Stage 1: CRF-based compression (fast, good quality)
-      if (ackMsg && ctx.chat?.id) {
-        try {
-          await ctx.api.editMessageText(ctx.chat.id, ackMsg.message_id, '🎬 Compressing video...');
-        } catch {
-          // ignore edit errors
-        }
-      }
+      onProgress?.('Compressing video...');
 
       console.log(`[vReddit] Video ${(finalSize / 1024 / 1024).toFixed(1)}MB exceeds limit, trying CRF compress`);
       const crfPath = path.join(tempDir, 'video_crf.mp4');
-      try {
-        const crfSize = await compressCrf(finalPath, crfPath);
-        console.log(`[vReddit] CRF compress: ${(crfSize / 1024 / 1024).toFixed(1)}MB`);
+      const crfSize = await compressCrf(finalPath, crfPath);
+      console.log(`[vReddit] CRF compress: ${(crfSize / 1024 / 1024).toFixed(1)}MB`);
 
-        if (crfSize <= maxVideoBytes) {
-          finalPath = crfPath;
-          finalSize = crfSize;
+      if (crfSize <= maxVideoBytes) {
+        finalPath = crfPath;
+        finalSize = crfSize;
+      } else {
+        // Stage 2: Two-pass target compression (slower, exact size)
+        const twoPassTarget = Math.floor(maxSizeMB * 0.98); // 2% headroom
+        console.log(`[vReddit] CRF still too large, trying two-pass at ${twoPassTarget}MB target`);
+        const twoPassPath = path.join(tempDir, 'video_2pass.mp4');
+        const duration = await getVideoDuration(finalPath);
+        const twoPassSize = await compressTwoPass(finalPath, twoPassPath, twoPassTarget, duration);
+        console.log(`[vReddit] Two-pass compress: ${(twoPassSize / 1024 / 1024).toFixed(1)}MB`);
+
+        if (twoPassSize <= maxVideoBytes) {
+          finalPath = twoPassPath;
+          finalSize = twoPassSize;
         } else {
-          // Stage 2: Two-pass target compression (slower, exact size)
-          console.log('[vReddit] CRF still too large, trying two-pass at 49MB target');
-          const twoPassPath = path.join(tempDir, 'video_2pass.mp4');
-          const duration = await getVideoDuration(finalPath);
-          const twoPassSize = await compressTwoPass(finalPath, twoPassPath, 49, duration);
-          console.log(`[vReddit] Two-pass compress: ${(twoPassSize / 1024 / 1024).toFixed(1)}MB`);
-
-          if (twoPassSize <= maxVideoBytes) {
-            finalPath = twoPassPath;
-            finalSize = twoPassSize;
-          } else {
-            await replyMd(ctx, '❌ Video is too large even after compression\\.');
-            return;
-          }
+          throw new Error('Video is too large even after compression.');
         }
-      } catch (compressError) {
-        console.warn('[vReddit] Compression failed:', compressError);
-        await replyMd(ctx, '❌ Failed to compress video\\.');
-        return;
       }
     }
 
-    console.log(`[vReddit] Uploading ${(finalSize / 1024 / 1024).toFixed(1)}MB video to Telegram...`);
+    return { filePath: finalPath, size: finalSize, tempDir };
+  } catch (error) {
+    // Clean up on failure — caller won't get tempDir to clean
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch { /* ignore */ }
+    throw error;
+  }
+}
+
+/**
+ * Handle a vReddit request: download a Reddit or external video, upload it to Telegram, and remove temporary files.
+ *
+ * @param ctx - Telegram context used for sending acknowledgements, progress updates, and the final video
+ * @param input - User-provided token (URL, reddit post id, or similar) used to resolve and download the video
+ */
+export async function executeVReddit(ctx: Context, input: string): Promise<void> {
+  let ackMsg: { message_id: number } | null = null;
+  let tempDir: string | null = null;
+
+  try {
+    ackMsg = await ctx.reply('🎬 Downloading Reddit video...', { parse_mode: undefined });
+
+    const result = await downloadRedditVideo(
+      input,
+      config.REDDIT_VIDEO_MAX_SIZE_MB,
+      (msg) => {
+        if (ackMsg && ctx.chat?.id) {
+          ctx.api.editMessageText(ctx.chat.id, ackMsg.message_id, `🎬 ${msg}`).catch(() => {});
+        }
+      },
+    );
+    tempDir = result.tempDir;
+
+    console.log(`[vReddit] Uploading ${(result.size / 1024 / 1024).toFixed(1)}MB video to Telegram...`);
     await ctx.replyWithChatAction('upload_video');
-    await ctx.replyWithVideo(new InputFile(finalPath), {
+    await ctx.replyWithVideo(new InputFile(result.filePath), {
       supports_streaming: true,
     });
   } catch (error) {
     console.warn('[vReddit] Failed to download video:', error);
-    await replyMd(ctx, '❌ Failed to download video\\.');
+    const msg = error instanceof Error ? error.message : 'Failed to download video.';
+    await replyMd(ctx, `❌ ${msg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
   } finally {
     if (ackMsg && ctx.chat?.id) {
       try {

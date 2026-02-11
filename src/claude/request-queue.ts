@@ -1,4 +1,5 @@
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
+import { eventBus } from '../dashboard/event-bus.js';
 
 type QueuedRequest<T> = {
   message: string;
@@ -52,6 +53,14 @@ export function getQueuePosition(chatId: number): number {
   return queue ? queue.length : 0;
 }
 
+/**
+ * Enqueues a request for the specified chat and resolves with the handler's result once the request is processed.
+ *
+ * @param chatId - Numeric identifier for the chat whose queue will receive the request
+ * @param message - The request text (used for queue metadata and previews)
+ * @param handler - Function invoked when the request is dequeued; its resolved value becomes the returned result
+ * @returns The value produced by `handler` when the queued request is executed
+ */
 export async function queueRequest<T>(
   chatId: number,
   message: string,
@@ -71,11 +80,17 @@ export async function queueRequest<T>(
       pendingQueues.set(chatId, queue);
     }
     queue.push(request as QueuedRequest<unknown>);
+    eventBus.emit('queue:enqueue', { chatId, message: message.slice(0, 200), queueDepth: queue.length, timestamp: Date.now() });
 
     processQueue(chatId);
   });
 }
 
+/**
+ * Processes the next queued request for the given chat, invoking its handler and resolving or rejecting that request's promise; emits queue lifecycle events and performs per-chat cleanup (abort controller, active query, cancelled flag).
+ *
+ * @returns Nothing.
+ */
 async function processQueue(chatId: number): Promise<void> {
   if (processingFlags.get(chatId)) {
     return;
@@ -87,7 +102,9 @@ async function processQueue(chatId: number): Promise<void> {
   }
 
   processingFlags.set(chatId, true);
+  eventBus.emit('queue:processing', { chatId, isProcessing: true, timestamp: Date.now() });
   const request = queue.shift()!;
+  eventBus.emit('queue:dequeue', { chatId, timestamp: Date.now() });
 
   try {
     const result = await request.handler();
@@ -96,6 +113,7 @@ async function processQueue(chatId: number): Promise<void> {
     request.reject(error instanceof Error ? error : new Error(String(error)));
   } finally {
     processingFlags.set(chatId, false);
+    eventBus.emit('queue:processing', { chatId, isProcessing: false, timestamp: Date.now() });
     clearAbortController(chatId);
     clearActiveQuery(chatId);
     clearCancelled(chatId);

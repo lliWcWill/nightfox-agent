@@ -9,11 +9,11 @@ const envPath = process.env.CLAUDEGRAM_ENV_PATH || defaultEnvPath;
 loadEnv({ path: envPath });
 
 const envSchema = z.object({
-  TELEGRAM_BOT_TOKEN: z.string().min(1, 'Telegram bot token is required'),
+  TELEGRAM_BOT_TOKEN: z.string().default(''),
   ALLOWED_USER_IDS: z
     .string()
-    .min(1, 'At least one allowed user ID is required')
-    .transform((val) => val.split(',').map((id) => parseInt(id.trim(), 10))),
+    .default('')
+    .transform((val) => val ? val.split(',').map((id) => parseInt(id.trim(), 10)) : []),
   ANTHROPIC_API_KEY: z.string().optional(), // Optional - uses Claude Max subscription if not set
   // OpenAI (TTS)
   OPENAI_API_KEY: z.string().optional(),
@@ -113,6 +113,8 @@ const envSchema = z.object({
     .string()
     .default('2000')
     .transform((val) => parseInt(val, 10)),
+  // Gemini (Live Audio)
+  GEMINI_API_KEY: z.string().optional(),
   // Voice transcription (Groq Whisper)
   GROQ_API_KEY: z.string().optional(),
   GROQ_TRANSCRIBE_PATH: z.string().default(''),
@@ -124,6 +126,10 @@ const envSchema = z.object({
     .string()
     .default('19')
     .transform((val) => parseInt(val, 10)),
+  VOICE_PROXY_ENABLED: z
+    .string()
+    .default('true')
+    .transform((val) => val.toLowerCase() === 'true'),
   VOICE_LANGUAGE: z.string().default('en'),
   VOICE_TIMEOUT_MS: z
     .string()
@@ -136,6 +142,7 @@ const envSchema = z.object({
     .transform((val) => parseInt(val, 10)),
   // Media extraction (/extract command)
   YTDLP_COOKIES_PATH: z.string().default(''),
+  YTDLP_COOKIES_BROWSER: z.string().default(''), // e.g. 'firefox', 'chrome' — uses --cookies-from-browser
   YTDLP_PROXY_LIST_PATH: z.string().default(''),
   EXTRACT_TRANSCRIBE_TIMEOUT_MS: z
     .string()
@@ -167,6 +174,22 @@ const envSchema = z.object({
     .string()
     .default('false')
     .transform((val) => val.toLowerCase() === 'true'),
+  // Dashboard
+  DASHBOARD_ENABLED: z
+    .string()
+    .default('false')
+    .transform((val) => val.toLowerCase() === 'true'),
+  DASHBOARD_PORT: z
+    .string()
+    .default('3001')
+    .transform((val) => parseInt(val, 10)),
+  // Factory Droid integration
+  DROID_EXEC_PATH: z.string().default('~/.local/bin/droid'),
+  DROID_DEFAULT_MODEL: z.string().default('groq/llama-4-scout-17b-16e-instruct'),
+  DROID_TIMEOUT_MS: z
+    .string()
+    .default('300000')
+    .transform((val) => parseInt(val, 10)),
 });
 
 const parsed = envSchema.safeParse(process.env);

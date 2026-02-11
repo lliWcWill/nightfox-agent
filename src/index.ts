@@ -3,7 +3,15 @@ import { createBot } from './bot/bot.js';
 import { config } from './config.js';
 import { preventSleep, allowSleep } from './utils/caffeinate.js';
 import { stopCleanup } from './telegram/deduplication.js';
+import { startDashboardServer, stopDashboardServer } from './dashboard/server.js';
 
+/**
+ * Start and run the Telegram bot process, handling startup tasks and graceful shutdown.
+ *
+ * Performs startup logging, prevents system sleep, creates and initializes the bot, optionally
+ * starts the dashboard server, starts the concurrent runner to process updates, registers
+ * SIGINT/SIGTERM handlers to perform a guarded graceful shutdown, and waits until the runner stops.
+ */
 async function main() {
   console.log('🤖 Starting Claudegram...');
   console.log(`📋 Allowed users: ${config.ALLOWED_USER_IDS.join(', ')}`);
@@ -19,6 +27,11 @@ async function main() {
   console.log(`✅ Bot started as @${bot.botInfo.username}`);
   console.log('📱 Send /start in Telegram to begin');
 
+  // Start dashboard server if enabled
+  if (config.DASHBOARD_ENABLED) {
+    startDashboardServer(config.DASHBOARD_PORT);
+  }
+
   // Start concurrent runner — updates are processed in parallel,
   // with per-chat ordering enforced by the sequentialize middleware in bot.ts.
   // This lets /cancel bypass the per-chat queue and interrupt running queries.
@@ -32,6 +45,7 @@ async function main() {
     console.log('\n👋 Shutting down...');
     allowSleep();
     stopCleanup();
+    stopDashboardServer();
     await runner.stop();
     process.exit(0);
   };
