@@ -479,6 +479,10 @@ export class DiscordMessageSender {
     const state = this.streamStates.get(channelId);
     if (!state) return;
 
+    // Remove from map FIRST to prevent any pending debounced flushUpdate
+    // from racing with our final edit (the flushUpdate guard checks the map)
+    this.streamStates.delete(channelId);
+
     this.stopSpinner(state);
     state.currentOperation = null;
 
@@ -525,8 +529,6 @@ export class DiscordMessageSender {
         // Give up silently
       }
     }
-
-    this.streamStates.delete(channelId);
   }
 
   private async sendAsPlainText(state: DiscordStreamState, content: string): Promise<void> {
@@ -597,6 +599,9 @@ export class DiscordMessageSender {
     const state = this.streamStates.get(channelId);
     if (!state) return;
 
+    // Remove from map FIRST to prevent debounced flushUpdate race
+    this.streamStates.delete(channelId);
+
     this.stopSpinner(state);
 
     const client = getDiscordClient();
@@ -613,8 +618,6 @@ export class DiscordMessageSender {
     } catch (error) {
       console.error('[Discord] Error cancelling stream:', error);
     }
-
-    this.streamStates.delete(channelId);
   }
 }
 
