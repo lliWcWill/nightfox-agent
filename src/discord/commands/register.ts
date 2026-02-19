@@ -108,6 +108,10 @@ const commands = [
     .setDescription('Show Claude context window usage'),
 
   new SlashCommandBuilder()
+    .setName('teleport')
+    .setDescription('Get the session ID to resume in your terminal'),
+
+  new SlashCommandBuilder()
     .setName('transcribe')
     .setDescription('Transcribe an audio file to text')
     .addAttachmentOption(option =>

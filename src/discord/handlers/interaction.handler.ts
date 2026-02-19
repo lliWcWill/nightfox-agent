@@ -22,6 +22,7 @@ import { handleTTS } from '../commands/tts.js';
 import { handleVoice } from '../commands/voice.js';
 import { handleDroid } from '../commands/droid.js';
 import { handleExtract } from '../commands/extract.js';
+import { handleTeleport } from '../commands/teleport.js';
 import { sanitizeError } from '../../utils/sanitize.js';
 
 /**
@@ -103,6 +104,9 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
         break;
       case 'extract':
         await handleExtract(command);
+        break;
+      case 'teleport':
+        await handleTeleport(command);
         break;
       default:
         await command.reply({ content: `Unknown command: ${command.commandName}`, ephemeral: true });
