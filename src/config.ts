@@ -157,6 +157,11 @@ const envSchema = z.object({
     .string()
     .default('true')
     .transform((val) => val.toLowerCase() === 'true'),
+  // Context monitor: auto-alert when context window drops below thresholds (15% and 5% remaining)
+  CONTEXT_MONITOR_ENABLED: z
+    .string()
+    .default('true')
+    .transform((val) => val.toLowerCase() === 'true'),
   // Terminal UI mode
   TERMINAL_UI_DEFAULT: z
     .string()

@@ -59,7 +59,13 @@ function getSequentializeKey(ctx: Context): string | undefined {
 }
 
 export async function createBot(): Promise<Bot> {
-  const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
+  const bot = new Bot(config.TELEGRAM_BOT_TOKEN, {
+    client: {
+      // Increase timeout for large file uploads (videos, images)
+      // Default is too short and causes 21MB+ uploads to fail
+      timeoutSeconds: 120,
+    },
+  });
 
   // Register command menu for autocomplete (non-blocking)
   bot.api.setMyCommands([

@@ -11,6 +11,8 @@ const DASH_FETCH_TIMEOUT_MS = 15000;
 const VIDEO_DOWNLOAD_TIMEOUT_SEC = 120;
 const FFMPEG_TIMEOUT_MS = 120000;
 const FFMPEG_COMPRESS_TIMEOUT_MS = 300000; // 5 min for compression
+// Always compress above this threshold for faster/more reliable Telegram uploads
+const COMPRESS_THRESHOLD_MB = 15;
 
 type VideoSource =
   | { type: 'dash'; url: string }
@@ -691,7 +693,14 @@ export async function downloadRedditVideo(
       console.log(`[vReddit] yt-dlp downloaded: ${(finalSize / 1024 / 1024).toFixed(1)}MB`);
     }
 
-    if (finalSize > maxVideoBytes) {
+    const compressThresholdBytes = COMPRESS_THRESHOLD_MB * 1024 * 1024;
+    const needsCompress = finalSize > maxVideoBytes || finalSize > compressThresholdBytes;
+
+    if (needsCompress) {
+      const reason = finalSize > maxVideoBytes
+        ? `exceeds ${maxSizeMB}MB limit`
+        : `above ${COMPRESS_THRESHOLD_MB}MB upload threshold`;
+
       // Save the original uncompressed video to a temp directory for later retrieval
       const timestamp = Date.now();
       const savedDir = path.join(os.tmpdir(), 'claudegram-vreddit-originals');
@@ -706,7 +715,7 @@ export async function downloadRedditVideo(
 
       onProgress?.('Compressing video...');
 
-      console.log(`[vReddit] Video ${(finalSize / 1024 / 1024).toFixed(1)}MB exceeds limit, trying CRF compress`);
+      console.log(`[vReddit] Video ${(finalSize / 1024 / 1024).toFixed(1)}MB ${reason}, trying CRF compress`);
       const crfPath = path.join(tempDir, 'video_crf.mp4');
       const crfSize = await compressCrf(finalPath, crfPath);
       console.log(`[vReddit] CRF compress: ${(crfSize / 1024 / 1024).toFixed(1)}MB`);

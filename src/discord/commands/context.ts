@@ -149,8 +149,11 @@ export async function handleContext(interaction: ChatInputCommandInteraction): P
   // Try cached SDK usage first (instant)
   const cached = getCachedUsage(chatId);
   if (cached) {
+    // Active context = input + output (cache reads are stored outside the active window)
+    const activeTokens = cached.inputTokens + cached.outputTokens;
+    const totalTokens = activeTokens + cached.cacheReadTokens + cached.cacheWriteTokens;
     const pct = cached.contextWindow > 0
-      ? Math.round(((cached.inputTokens + cached.outputTokens + cached.cacheReadTokens) / cached.contextWindow) * 100)
+      ? Math.round((activeTokens / cached.contextWindow) * 100)
       : 0;
     const bar = getProgressBar(pct);
 
@@ -161,6 +164,7 @@ export async function handleContext(interaction: ChatInputCommandInteraction): P
       + `• **Output tokens:** ${fmtTokens(cached.outputTokens)}\n`
       + `• **Cache read:** ${fmtTokens(cached.cacheReadTokens)}\n`
       + `• **Cache write:** ${fmtTokens(cached.cacheWriteTokens)}\n`
+      + `• **Total tokens:** ${fmtTokens(totalTokens)}\n`
       + `• **Context window:** ${fmtTokens(cached.contextWindow)}\n`
       + `• **Turns this session:** ${cached.numTurns}\n`
       + `• **Cost this query:** $${cached.totalCostUsd.toFixed(4)}\n\n`

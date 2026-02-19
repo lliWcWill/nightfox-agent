@@ -59,6 +59,10 @@ interface DiscordStreamState {
   spinnerIndex: number;
   spinnerInterval: NodeJS.Timeout | null;
   currentOperation: ToolOperation | null;
+  /** Set true when finishStreaming starts — blocks further flushUpdate edits. */
+  finished: boolean;
+  /** Serializes all message.edit() calls to prevent race conditions. */
+  editLock: Promise<void>;
 }
 
 const SPINNER_INTERVAL_MS = 1500;
@@ -217,6 +221,8 @@ export class DiscordMessageSender {
       spinnerIndex: 0,
       spinnerInterval: null,
       currentOperation: null,
+      finished: false,
+      editLock: Promise.resolve(),
     };
     state.spinnerInterval = this.startSpinnerAnimation(channelId, state);
     this.streamStates.set(channelId, state);
@@ -239,6 +245,8 @@ export class DiscordMessageSender {
       spinnerIndex: 0,
       spinnerInterval: null,
       currentOperation: null,
+      finished: false,
+      editLock: Promise.resolve(),
     };
 
     state.spinnerInterval = this.startSpinnerAnimation(channelId, state);
@@ -263,6 +271,8 @@ export class DiscordMessageSender {
       spinnerIndex: 0,
       spinnerInterval: null,
       currentOperation: null,
+      finished: false,
+      editLock: Promise.resolve(),
     };
 
     state.spinnerInterval = this.startSpinnerAnimation(channelId, state);
@@ -284,6 +294,8 @@ export class DiscordMessageSender {
       spinnerIndex: 0,
       spinnerInterval: null,
       currentOperation: null,
+      finished: false,
+      editLock: Promise.resolve(),
     };
 
     state.spinnerInterval = this.startSpinnerAnimation(channelId, state);
@@ -307,6 +319,8 @@ export class DiscordMessageSender {
       spinnerIndex: 0,
       spinnerInterval: null,
       currentOperation: null,
+      finished: false,
+      editLock: Promise.resolve(),
     };
 
     state.spinnerInterval = this.startSpinnerAnimation(channelId, state);
@@ -398,6 +412,7 @@ export class DiscordMessageSender {
   private async flushUpdate(state: DiscordStreamState): Promise<void> {
     const currentState = this.streamStates.get(state.channelId);
     if (!currentState || currentState !== state) return;
+    if (state.finished) return;
 
     const maxLen = discordConfig.DISCORD_MAX_MESSAGE_LENGTH - 200;
     let content: string | undefined;
@@ -430,25 +445,30 @@ export class DiscordMessageSender {
       embed = buildThinkingEmbed(state.spinnerIndex);
     }
 
-    try {
-      const payload = embed
-        ? { content: '', embeds: [embed] }
-        : { content: content || '', embeds: [] };
+    // Serialize through editLock to prevent concurrent Discord API edits
+    state.editLock = state.editLock.then(async () => {
+      if (state.finished) return; // Re-check after waiting for lock
+      try {
+        const payload = embed
+          ? { content: '', embeds: [embed] }
+          : { content: content || '', embeds: [] };
 
-      if (state.interaction) {
-        await state.interaction.editReply(payload);
-      } else if (state.message) {
-        await state.message.edit(payload);
-      }
-      state.lastUpdate = Date.now();
-    } catch (error: unknown) {
-      if (error instanceof Error) {
-        const msg = error.message.toLowerCase();
-        if (!msg.includes('unknown message') && !msg.includes('missing access')) {
-          console.error('[Discord] Error updating stream:', error.message);
+        if (state.interaction) {
+          await state.interaction.editReply(payload);
+        } else if (state.message) {
+          await state.message.edit(payload);
+        }
+        state.lastUpdate = Date.now();
+      } catch (error: unknown) {
+        if (error instanceof Error) {
+          const msg = error.message.toLowerCase();
+          if (!msg.includes('unknown message') && !msg.includes('missing access')) {
+            console.error('[Discord] Error updating stream:', error.message);
+          }
         }
       }
-    }
+    });
+    await state.editLock;
   }
 
   private getToolAction(toolName: string): string {
@@ -479,12 +499,17 @@ export class DiscordMessageSender {
     const state = this.streamStates.get(channelId);
     if (!state) return;
 
-    // Remove from map FIRST to prevent any pending debounced flushUpdate
-    // from racing with our final edit (the flushUpdate guard checks the map)
+    // Mark finished FIRST — blocks any further flushUpdate edits from starting
+    state.finished = true;
+
+    // Remove from map to prevent new debounced flushUpdate callbacks
     this.streamStates.delete(channelId);
 
     this.stopSpinner(state);
     state.currentOperation = null;
+
+    // Wait for any in-flight flushUpdate edit to complete before sending final content
+    await state.editLock;
 
     const client = getDiscordClient();
     if (client?.user) {
@@ -599,10 +624,13 @@ export class DiscordMessageSender {
     const state = this.streamStates.get(channelId);
     if (!state) return;
 
-    // Remove from map FIRST to prevent debounced flushUpdate race
+    state.finished = true;
     this.streamStates.delete(channelId);
 
     this.stopSpinner(state);
+
+    // Wait for any in-flight edit to complete
+    await state.editLock;
 
     const client = getDiscordClient();
     if (client?.user) {

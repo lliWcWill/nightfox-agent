@@ -4,6 +4,7 @@ import { config } from './config.js';
 import { preventSleep, allowSleep } from './utils/caffeinate.js';
 import { stopCleanup } from './telegram/deduplication.js';
 import { startDashboardServer, stopDashboardServer } from './dashboard/server.js';
+import { contextMonitor } from './claude/context-monitor.js';
 
 /**
  * Start and run the Telegram bot process, handling startup tasks and graceful shutdown.
@@ -27,6 +28,11 @@ async function main() {
   console.log(`✅ Bot started as @${bot.botInfo.username}`);
   console.log('📱 Send /start in Telegram to begin');
 
+  // Start context monitor — fires independent alerts when context window runs low
+  if (config.CONTEXT_MONITOR_ENABLED) {
+    contextMonitor.start(bot.api);
+  }
+
   // Start dashboard server if enabled
   if (config.DASHBOARD_ENABLED) {
     startDashboardServer(config.DASHBOARD_PORT);
@@ -45,6 +51,7 @@ async function main() {
     console.log('\n👋 Shutting down...');
     allowSleep();
     stopCleanup();
+    contextMonitor.stop();
     stopDashboardServer();
     await runner.stop();
     process.exit(0);

@@ -15,6 +15,7 @@ import { sessionManager } from './session-manager.js';
 import { setActiveQuery, clearActiveQuery, isCancelled } from './request-queue.js';
 import { config } from '../config.js';
 import { eventBus } from '../dashboard/event-bus.js';
+import { contextMonitor } from './context-monitor.js';
 
 export interface AgentUsage {
   inputTokens: number;
@@ -814,6 +815,8 @@ export function clearConversation(chatId: number): void {
   conversationHistory.delete(chatId);
   chatSessionIds.delete(chatId);
   chatUsageCache.delete(chatId);
+  // Reset context monitor thresholds so alerts fire again for the new session
+  contextMonitor.resetChat(chatId);
 }
 
 export function setModel(chatId: number, model: string): void {
