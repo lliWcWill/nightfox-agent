@@ -52,8 +52,8 @@ export class AgentCache {
       agent,
       model,
       cwd,
-      lastResponseId: existing?.lastResponseId,
-      turnCount: existing?.turnCount ?? 0,
+      lastResponseId: undefined,
+      turnCount: 0,
     };
 
     this.cache.set(chatId, state);

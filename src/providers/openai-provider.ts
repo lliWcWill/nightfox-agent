@@ -229,6 +229,7 @@ export class OpenAIProvider implements AgentProvider {
       throw new Error(`OpenAI error: ${errorMessage}`);
     } finally {
       clearActiveQuery(chatId);
+      this.toolCallbackRefs.delete(chatId);
     }
 
     // Cache usage
@@ -289,7 +290,11 @@ export class OpenAIProvider implements AgentProvider {
         if (!ref.toolsUsed.includes(toolName)) {
           ref.toolsUsed.push(toolName);
         }
-        ref.onToolStart?.(toolName);
+        let toolInput: Record<string, unknown> | undefined;
+        if (callItem && 'arguments' in callItem && typeof callItem.arguments === 'string') {
+          try { toolInput = JSON.parse(callItem.arguments) as Record<string, unknown>; } catch { /* ignore parse errors */ }
+        }
+        ref.onToolStart?.(toolName, toolInput);
         eventBus.emit('agent:tool_start', {
           chatId: ref.chatId,
           toolName,

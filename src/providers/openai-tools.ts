@@ -9,6 +9,8 @@ import { execFile } from 'node:child_process';
 import { tool } from '@openai/agents';
 import { z } from 'zod';
 
+import { resolveBin } from '../utils/resolve-bin.js';
+
 /** Maximum bytes of tool output before truncation. */
 const MAX_OUTPUT_BYTES = 32_000;
 /** Per-tool execution timeout in ms. */
@@ -26,7 +28,7 @@ function runCli(
 ): Promise<string> {
   return new Promise((resolve) => {
     execFile(
-      cmd,
+      resolveBin(cmd),
       args,
       { cwd, timeout: TOOL_TIMEOUT_MS, maxBuffer: MAX_OUTPUT_BYTES * 2 },
       (error, stdout, stderr) => {
@@ -74,19 +76,20 @@ export function createFsuiteTools(cwd: string) {
     tool({
       name: 'fsearch',
       description:
-        'Search file contents using regex or literal patterns. ' +
-        'Usage: fsearch <pattern> [path] [flags]. ' +
-        'Flags: -i (case-insensitive), -w (word), -l (files only), ' +
-        '--type <ext>, --depth <n>, --context <n>.',
+        'Fast filename and path search using glob patterns and extensions. ' +
+        "Usage: fsearch <pattern_or_ext> [path] [flags]. " +
+        "Pattern examples: 'upscale*' (starts-with), '*progress*' (contains), " +
+        "'.log' or 'log' (extension search), '*error' (ends-with). " +
+        'Flags: -i (case-insensitive), --type <ext>, --depth <n>, -l (list paths only).',
       parameters: z.object({
-        pattern: z.string().describe('Search pattern (regex or literal)'),
+        query: z.string().describe("Glob pattern or file extension to search for, e.g. '*.ts', 'config*', '.log'"),
         args: z
           .string()
           .optional()
-          .describe('Additional CLI arguments, e.g. "--type ts --context 3 src/"'),
+          .describe('Additional CLI arguments, e.g. "--type ts --depth 3 src/"'),
       }),
       execute: async (input) => {
-        const args = [input.pattern];
+        const args = [input.query];
         if (input.args) args.push(...input.args.split(/\s+/));
         return runCli('fsearch', args, cwd);
       },
@@ -95,11 +98,12 @@ export function createFsuiteTools(cwd: string) {
     tool({
       name: 'fcontent',
       description:
-        'Read file contents with optional line range. ' +
-        'Usage: fcontent <query> where query is a file path, optionally with :startLine-endLine. ' +
-        'Returns file contents with line numbers.',
+        'Search file contents for matching text (grep-like). ' +
+        'The query argument is a search term, NOT a file path. ' +
+        'Returns matching lines with context. ' +
+        'Usage: fcontent <query> — searches for the query text across files in the working directory.',
       parameters: z.object({
-        query: z.string().describe('File path, optionally with :startLine-endLine range'),
+        query: z.string().describe('Text pattern to search for in file contents'),
       }),
       execute: async (input) => {
         return runCli('fcontent', [input.query], cwd);
