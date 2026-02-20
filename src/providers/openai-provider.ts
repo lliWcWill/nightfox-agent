@@ -1,19 +1,20 @@
 /**
- * OpenAI Chat Completions provider.
+ * OpenAI Agents SDK provider.
  *
- * Phase 1: Chat-only via raw Chat Completions API.
- * Phase 2 (planned): Upgrade to @openai/agents SDK for full agentic capabilities
- * (shell, code interpreter, web search, file search, multi-agent handoffs).
+ * Uses @openai/agents with Agent + run() for streaming, tool execution,
+ * and server-managed multi-turn via previousResponseId.
  */
 
-import OpenAI from 'openai';
+import { run, Agent } from '@openai/agents';
+import type { RunStreamEvent } from '@openai/agents';
 
 import { config } from '../config.js';
 import { sessionManager } from '../claude/session-manager.js';
-import { setActiveQuery, isCancelled } from '../claude/request-queue.js';
+import { setActiveQuery, clearActiveQuery, isCancelled } from '../claude/request-queue.js';
 import { eventBus } from '../dashboard/event-bus.js';
 import { contextMonitor } from '../claude/context-monitor.js';
-import { getSystemPrompt, stripReasoningSummary } from './system-prompt.js';
+import { stripReasoningSummary } from './system-prompt.js';
+import { AgentCache } from './openai-agent-cache.js';
 
 import type {
   AgentProvider,
@@ -23,33 +24,22 @@ import type {
   Cancellable,
 } from './types.js';
 
-interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
 /** Context window sizes for OpenAI models (Feb 2026). */
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
-  // GPT-5.2 family — current flagship
   'gpt-5.2': 400_000,
   'gpt-5.2-pro': 400_000,
-  // GPT-5.1 family
   'gpt-5.1': 400_000,
   'gpt-5.1-codex': 400_000,
   'gpt-5.1-codex-mini': 400_000,
-  // GPT-5 family
   'gpt-5': 400_000,
   'gpt-5-mini': 400_000,
   'gpt-5-nano': 400_000,
-  // GPT-5.2/5.3 Codex (agentic coding)
   'gpt-5.2-codex': 400_000,
   'gpt-5.3-codex': 400_000,
   'gpt-5.3-codex-spark': 128_000,
-  // GPT-4.1 family (1M context)
   'gpt-4.1': 1_047_576,
   'gpt-4.1-mini': 1_047_576,
   'gpt-4.1-nano': 1_047_576,
-  // Legacy (still available in API)
   'gpt-4o': 128_000,
   'gpt-4o-mini': 128_000,
 };
@@ -67,9 +57,6 @@ export const OPENAI_MODEL_TIERS = {
 } as const;
 
 export const VALID_OPENAI_MODELS = new Set(Object.keys(MODEL_CONTEXT_WINDOWS));
-const CONTEXT_TRUNCATION_RATIO = 0.8;
-/** Rough estimate: 1 token ≈ 4 chars for truncation math. */
-const CHARS_PER_TOKEN = 4;
 
 function getContextWindow(model: string): number {
   return MODEL_CONTEXT_WINDOWS[model] ?? DEFAULT_CONTEXT_WINDOW;
@@ -84,19 +71,29 @@ class AbortCancellable implements Cancellable {
   }
 }
 
+/**
+ * Mutable ref for per-turn tool callbacks.
+ * Lifecycle hooks are registered once on the Agent, but read from this ref
+ * each invocation so they always target the current turn's callbacks.
+ */
+interface ToolCallbackRef {
+  onToolStart?: AgentOptions['onToolStart'];
+  onToolEnd?: AgentOptions['onToolEnd'];
+  toolsUsed: string[];
+  chatId: number;
+}
+
 export class OpenAIProvider implements AgentProvider {
-  private client: OpenAI;
-  private readonly chatHistories = new Map<number, ChatMessage[]>();
+  private readonly agentCache = new AgentCache();
   private readonly chatModels = new Map<number, string>();
   private readonly chatUsageCache = new Map<number, AgentUsage>();
-  private readonly chatTurnCounts = new Map<number, number>();
+  private readonly toolCallbackRefs = new Map<number, ToolCallbackRef>();
 
   constructor() {
     if (!config.OPENAI_API_KEY) {
       throw new Error('[OpenAI] OPENAI_API_KEY is required when AGENT_PROVIDER=openai');
     }
-    this.client = new OpenAI({ apiKey: config.OPENAI_API_KEY });
-    console.log(`[OpenAI] Provider initialized, default model: ${config.OPENAI_DEFAULT_MODEL}`);
+    console.log(`[OpenAI] Agents SDK provider initialized, default model: ${config.OPENAI_DEFAULT_MODEL}`);
   }
 
   async send(
@@ -104,7 +101,7 @@ export class OpenAIProvider implements AgentProvider {
     message: string,
     options: AgentOptions,
   ): Promise<AgentResponse> {
-    const { onProgress, abortController, command, model, platform } = options;
+    const { onProgress, onToolStart, onToolEnd, abortController, command, model, platform } = options;
 
     const session = sessionManager.getSession(chatId);
     if (!session) {
@@ -121,20 +118,21 @@ export class OpenAIProvider implements AgentProvider {
     const effectiveModel = model || this.chatModels.get(chatId) || config.OPENAI_DEFAULT_MODEL;
     const contextWindow = getContextWindow(effectiveModel);
 
-    // Get or initialize history with system prompt
-    let history = this.chatHistories.get(chatId);
-    if (!history) {
-      history = [{ role: 'system', content: getSystemPrompt(platform) }];
-    }
-
-    // Add user message
-    history.push({ role: 'user', content: prompt });
-
-    // Truncate if approaching context limit
-    this.truncateHistory(history, contextWindow);
+    // Get or create a cached Agent instance (invalidates on model/cwd change)
+    const agentState = this.agentCache.getOrCreate(
+      chatId,
+      effectiveModel,
+      session.workingDirectory,
+      platform,
+    );
 
     const agentStartTime = Date.now();
     const controller = abortController || new AbortController();
+    const toolsUsed: string[] = [];
+
+    // Update the mutable callback ref so lifecycle hooks target THIS turn
+    const callbackRef: ToolCallbackRef = { onToolStart, onToolEnd, toolsUsed, chatId };
+    this.toolCallbackRefs.set(chatId, callbackRef);
 
     eventBus.emit('agent:start', {
       chatId,
@@ -150,49 +148,71 @@ export class OpenAIProvider implements AgentProvider {
     let resultUsage: AgentUsage | undefined;
 
     try {
-      const runner = this.client.chat.completions.stream(
-        {
-          model: effectiveModel,
-          messages: history,
-          stream_options: { include_usage: true },
-        },
-        { signal: controller.signal },
-      );
+      // Register lifecycle hooks (idempotent — only attaches once per Agent)
+      this.ensureToolHooks(agentState.agent);
 
-      runner.on('content', (diff) => {
-        fullText += diff;
-        onProgress?.(fullText);
+      // Run with streaming — uses previousResponseId for server-side multi-turn
+      const result = await run(agentState.agent, prompt, {
+        stream: true,
+        signal: controller.signal,
+        previousResponseId: agentState.lastResponseId,
       });
 
-      runner.on('totalUsage', (usage) => {
-        const turns = this.chatTurnCounts.get(chatId) ?? 0;
-        resultUsage = {
-          inputTokens: usage.prompt_tokens ?? 0,
-          outputTokens: usage.completion_tokens ?? 0,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
-          totalCostUsd: 0, // OpenAI doesn't report cost in the response
-          contextWindow,
-          numTurns: turns + 1,
-          model: effectiveModel,
-        };
-      });
+      // Consume the stream for text deltas
+      for await (const event of result) {
+        this.handleStreamEvent(event, (delta) => {
+          fullText += delta;
+          onProgress?.(fullText);
+        });
+      }
 
-      // Wait for stream to finish
-      await runner.finalChatCompletion();
+      // Wait for the run to fully complete
+      await result.completed;
+
+      // Extract tools used from newItems
+      for (const item of result.newItems) {
+        if (item.type === 'tool_call_item' && item.rawItem) {
+          const raw = item.rawItem;
+          if ('name' in raw && typeof raw.name === 'string' && !toolsUsed.includes(raw.name)) {
+            toolsUsed.push(raw.name);
+          }
+        }
+      }
+
+      // If finalOutput is available and fullText is empty (edge case), use it
+      if (!fullText && result.finalOutput) {
+        fullText = String(result.finalOutput);
+      }
+
+      // Track the lastResponseId for multi-turn continuity
+      this.agentCache.setLastResponseId(chatId, result.lastResponseId);
+
+      // Extract usage from the run
+      const usage = result.state.usage;
+      const turnCount = this.agentCache.incrementTurn(chatId);
+      resultUsage = {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalCostUsd: 0,
+        contextWindow,
+        numTurns: turnCount,
+        model: effectiveModel,
+      };
 
     } catch (error: unknown) {
       if (isCancelled(chatId) || controller.signal.aborted) {
         eventBus.emit('agent:complete', {
           chatId,
           text: '✅ Cancelled',
-          toolsUsed: [],
+          toolsUsed,
           durationMs: Date.now() - agentStartTime,
           timestamp: Date.now(),
         });
         return {
           text: '✅ Successfully cancelled - no tools or agents in process.',
-          toolsUsed: [],
+          toolsUsed,
         };
       }
 
@@ -202,22 +222,14 @@ export class OpenAIProvider implements AgentProvider {
       eventBus.emit('agent:complete', {
         chatId,
         text: '',
-        toolsUsed: [],
+        toolsUsed,
         durationMs: Date.now() - agentStartTime,
         timestamp: Date.now(),
       });
       throw new Error(`OpenAI error: ${errorMessage}`);
+    } finally {
+      clearActiveQuery(chatId);
     }
-
-    // Store assistant response in history
-    if (fullText && !controller.signal.aborted) {
-      history.push({ role: 'assistant', content: fullText });
-    }
-    this.chatHistories.set(chatId, history);
-
-    // Update turn count
-    const turns = (this.chatTurnCounts.get(chatId) ?? 0) + 1;
-    this.chatTurnCounts.set(chatId, turns);
 
     // Cache usage
     if (resultUsage) {
@@ -227,7 +239,7 @@ export class OpenAIProvider implements AgentProvider {
     eventBus.emit('agent:complete', {
       chatId,
       text: fullText.slice(0, 500),
-      toolsUsed: [],
+      toolsUsed,
       usage: resultUsage,
       durationMs: Date.now() - agentStartTime,
       timestamp: Date.now(),
@@ -235,15 +247,87 @@ export class OpenAIProvider implements AgentProvider {
 
     return {
       text: stripReasoningSummary(fullText) || 'No response from OpenAI.',
-      toolsUsed: [],
+      toolsUsed,
       usage: resultUsage,
     };
   }
 
+  /**
+   * Process a single stream event, extracting text deltas.
+   */
+  private handleStreamEvent(
+    event: RunStreamEvent,
+    onDelta: (delta: string) => void,
+  ): void {
+    if (
+      event.type === 'raw_model_stream_event' &&
+      event.data.type === 'output_text_delta'
+    ) {
+      const data = event.data;
+      if ('delta' in data && typeof data.delta === 'string') {
+        onDelta(data.delta);
+      }
+    }
+  }
+
+  /**
+   * Attach lifecycle hooks to the Agent for tool start/end events.
+   * Hooks are registered once per Agent instance. They read from the
+   * mutable `toolCallbackRefs` map so callbacks are always current.
+   */
+  private readonly hookedAgents = new WeakSet<Agent>();
+
+  private ensureToolHooks(agent: Agent): void {
+    if (this.hookedAgents.has(agent)) return;
+    this.hookedAgents.add(agent);
+
+    agent.on('agent_tool_start', (_ctx, tool, details) => {
+      const callItem = details?.toolCall;
+      const toolName = tool?.name || ('name' in callItem ? String(callItem.name) : 'unknown');
+      const ref = this.findCallbackRefForAgent(agent);
+      if (ref) {
+        if (!ref.toolsUsed.includes(toolName)) {
+          ref.toolsUsed.push(toolName);
+        }
+        ref.onToolStart?.(toolName);
+        eventBus.emit('agent:tool_start', {
+          chatId: ref.chatId,
+          toolName,
+          timestamp: Date.now(),
+        });
+      }
+    });
+
+    agent.on('agent_tool_end', (_ctx, tool, _result, details) => {
+      const callItem = details?.toolCall;
+      const toolName = tool?.name || ('name' in callItem ? String(callItem.name) : 'unknown');
+      const ref = this.findCallbackRefForAgent(agent);
+      if (ref) {
+        ref.onToolEnd?.();
+        eventBus.emit('agent:tool_end', {
+          chatId: ref.chatId,
+          toolName,
+          timestamp: Date.now(),
+        });
+      }
+    });
+  }
+
+  /** Find the current tool callback ref for the chat that owns this Agent. */
+  private findCallbackRefForAgent(agent: Agent): ToolCallbackRef | undefined {
+    // Look up the chatId from the agent cache, then get the callback ref
+    for (const [chatId, ref] of this.toolCallbackRefs) {
+      if (this.agentCache.getAgent(chatId) === agent) {
+        return ref;
+      }
+    }
+    return undefined;
+  }
+
   clearConversation(chatId: number): void {
-    this.chatHistories.delete(chatId);
+    this.agentCache.delete(chatId);
     this.chatUsageCache.delete(chatId);
-    this.chatTurnCounts.delete(chatId);
+    this.toolCallbackRefs.delete(chatId);
     contextMonitor.resetChat(chatId);
   }
 
@@ -265,28 +349,5 @@ export class OpenAIProvider implements AgentProvider {
 
   isDangerousMode(): boolean {
     return config.DANGEROUS_MODE;
-  }
-
-  /**
-   * Truncate oldest messages (preserving system prompt) when history
-   * exceeds ~80% of the model's context window.
-   */
-  private truncateHistory(history: ChatMessage[], contextWindow: number): void {
-    const maxChars = contextWindow * CHARS_PER_TOKEN * CONTEXT_TRUNCATION_RATIO;
-
-    let totalChars = 0;
-    for (const msg of history) {
-      totalChars += msg.content.length;
-    }
-
-    if (totalChars <= maxChars) return;
-
-    // Always keep the system prompt (index 0) and the latest user message (last)
-    while (totalChars > maxChars && history.length > 2) {
-      const removed = history.splice(1, 1)[0];
-      totalChars -= removed.content.length;
-    }
-
-    console.log(`[OpenAI] Truncated history to ${history.length} messages (${Math.round(totalChars / 1000)}k chars)`);
   }
 }

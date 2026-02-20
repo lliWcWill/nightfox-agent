@@ -15,9 +15,9 @@ const envSchema = z.object({
     .default('')
     .transform((val) => val ? val.split(',').map((id) => parseInt(id.trim(), 10)) : []),
   ANTHROPIC_API_KEY: z.string().optional(), // Optional - uses Claude Max subscription if not set
-  // OpenAI (TTS + optional agent provider)
+  // OpenAI (TTS + Agents SDK provider)
   OPENAI_API_KEY: z.string().optional(),
-  // Agent provider: 'claude' (Agent SDK) or 'openai' (Chat Completions API)
+  // Agent provider: 'claude' (Claude Agent SDK) or 'openai' (OpenAI Agents SDK)
   AGENT_PROVIDER: z.enum(['claude', 'openai']).default('claude'),
   OPENAI_DEFAULT_MODEL: z.string().default('gpt-5.2'),
   WORKSPACE_DIR: z.string().default(process.env.HOME || '.'),
@@ -209,5 +209,11 @@ if (!parsed.success) {
 }
 
 export const config = parsed.data;
+
+// Ensure OPENAI_API_KEY is in process.env for the @openai/agents SDK,
+// which reads it directly from the environment.
+if (config.OPENAI_API_KEY) {
+  process.env.OPENAI_API_KEY = config.OPENAI_API_KEY;
+}
 
 export type Config = typeof config;
