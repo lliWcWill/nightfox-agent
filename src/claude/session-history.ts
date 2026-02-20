@@ -7,6 +7,7 @@ import { z } from 'zod';
 const sessionHistoryEntrySchema = z.object({
   conversationId: z.string(),
   claudeSessionId: z.string().optional(),
+  openaiConversationId: z.string().optional(),
   projectPath: z.string(),
   projectName: z.string(),
   lastMessagePreview: z.string(),
@@ -183,6 +184,30 @@ class SessionHistory {
     const entry = history.find((e) => e.conversationId === conversationId);
     if (entry) {
       entry.claudeSessionId = claudeSessionId;
+      entry.lastActivity = new Date().toISOString();
+      this.save();
+    }
+  }
+
+  updateOpenAIConversationId(chatId: number, conversationId: string, openaiConvId: string): void {
+    const history = this.data.sessions[chatId];
+    if (!history) return;
+
+    const entry = history.find((e) => e.conversationId === conversationId);
+    if (entry) {
+      entry.openaiConversationId = openaiConvId;
+      entry.lastActivity = new Date().toISOString();
+      this.save();
+    }
+  }
+
+  clearOpenAIConversationId(chatId: number, conversationId: string): void {
+    const history = this.data.sessions[chatId];
+    if (!history) return;
+
+    const entry = history.find((e) => e.conversationId === conversationId);
+    if (entry) {
+      entry.openaiConversationId = undefined;
       entry.lastActivity = new Date().toISOString();
       this.save();
     }

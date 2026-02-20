@@ -53,7 +53,7 @@ export interface AgentProvider {
     options: AgentOptions,
   ): Promise<AgentResponse>;
 
-  clearConversation(chatId: number): void;
+  clearConversation(chatId: number): void | Promise<void>;
   setModel(chatId: number, model: string): void;
   getModel(chatId: number): string;
   clearModel(chatId: number): void;

@@ -109,7 +109,8 @@ IMPORTANT: When you have fully completed this task, respond with the word "DONE"
 }
 
 export function clearConversation(chatId: number): void {
-  getProvider().clearConversation(chatId);
+  // Fire-and-forget: OpenAI provider may return Promise for remote cleanup
+  void getProvider().clearConversation(chatId);
 }
 
 export function setModel(chatId: number, model: string): void {

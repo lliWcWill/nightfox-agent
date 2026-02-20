@@ -31,6 +31,7 @@ function resolveWorkingDirectory(storedPath: string): string {
 interface Session {
   conversationId: string;
   claudeSessionId?: string;
+  openaiConversationId?: string;
   workingDirectory: string;
   createdAt: Date;
   lastActivity: Date;
@@ -99,6 +100,7 @@ class SessionManager {
     const session: Session = {
       conversationId: historyEntry.conversationId,
       claudeSessionId: historyEntry.claudeSessionId,
+      openaiConversationId: historyEntry.openaiConversationId,
       workingDirectory: resolvedPath,
       createdAt: new Date(historyEntry.createdAt),
       lastActivity: new Date(),
@@ -130,6 +132,22 @@ class SessionManager {
     session.claudeSessionId = claudeSessionId;
     session.lastActivity = new Date();
     sessionHistory.updateClaudeSessionId(chatId, session.conversationId, claudeSessionId);
+  }
+
+  setOpenAIConversationId(chatId: number, openaiConvId: string): void {
+    const session = this.sessions.get(chatId);
+    if (!session) return;
+    session.openaiConversationId = openaiConvId;
+    session.lastActivity = new Date();
+    sessionHistory.updateOpenAIConversationId(chatId, session.conversationId, openaiConvId);
+  }
+
+  clearOpenAIConversationId(chatId: number): void {
+    const session = this.sessions.get(chatId);
+    if (!session) return;
+    session.openaiConversationId = undefined;
+    session.lastActivity = new Date();
+    sessionHistory.clearOpenAIConversationId(chatId, session.conversationId);
   }
 
   private generateConversationId(): string {

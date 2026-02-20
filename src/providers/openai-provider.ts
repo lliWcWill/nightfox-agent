@@ -2,7 +2,7 @@
  * OpenAI Agents SDK provider.
  *
  * Uses @openai/agents with Agent + run() for streaming, tool execution,
- * and server-managed multi-turn via previousResponseId.
+ * and server-managed multi-turn via OpenAIConversationsSession.
  */
 
 import { run, Agent } from '@openai/agents';
@@ -83,6 +83,16 @@ interface ToolCallbackRef {
   chatId: number;
 }
 
+/** Check if an error is a stale conversation (404 / not found). */
+function isConversationNotFoundError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const msg = error.message.toLowerCase();
+  // Check for HTTP 404 or "conversation" + "not found" in error message
+  if (msg.includes('404')) return true;
+  if (msg.includes('conversation') && msg.includes('not found')) return true;
+  return false;
+}
+
 export class OpenAIProvider implements AgentProvider {
   private readonly agentCache = new AgentCache();
   private readonly chatModels = new Map<number, string>();
@@ -119,11 +129,13 @@ export class OpenAIProvider implements AgentProvider {
     const contextWindow = getContextWindow(effectiveModel);
 
     // Get or create a cached Agent instance (invalidates on model/cwd change)
+    // On cold start, load persisted openaiConversationId from session manager
     const agentState = this.agentCache.getOrCreate(
       chatId,
       effectiveModel,
       session.workingDirectory,
       platform,
+      session.openaiConversationId,
     );
 
     const agentStartTime = Date.now();
@@ -151,12 +163,13 @@ export class OpenAIProvider implements AgentProvider {
       // Register lifecycle hooks (idempotent — only attaches once per Agent)
       this.ensureToolHooks(agentState.agent);
 
-      // Run with streaming — uses previousResponseId for server-side multi-turn
-      const result = await run(agentState.agent, prompt, {
-        stream: true,
-        signal: controller.signal,
-        previousResponseId: agentState.lastResponseId,
-      });
+      // Run with streaming — uses OpenAIConversationsSession for server-side multi-turn
+      const result = await this.runWithStaleRecovery(
+        chatId,
+        agentState,
+        prompt,
+        controller,
+      );
 
       // Consume the stream for text deltas
       for await (const event of result) {
@@ -184,8 +197,12 @@ export class OpenAIProvider implements AgentProvider {
         fullText = String(result.finalOutput);
       }
 
-      // Track the lastResponseId for multi-turn continuity
-      this.agentCache.setLastResponseId(chatId, result.lastResponseId);
+      // Persist conversationId after first successful run
+      const convSession = agentState.session;
+      const convId = await convSession.getSessionId();
+      if (convId && convId !== session.openaiConversationId) {
+        sessionManager.setOpenAIConversationId(chatId, convId);
+      }
 
       // Extract usage from the run
       const usage = result.state.usage;
@@ -251,6 +268,50 @@ export class OpenAIProvider implements AgentProvider {
       toolsUsed,
       usage: resultUsage,
     };
+  }
+
+  /**
+   * Run with stale session recovery.
+   * If the conversation is not found (404), clear the stale ID, create a
+   * fresh session, and retry once.
+   */
+  private async runWithStaleRecovery(
+    chatId: number,
+    agentState: ReturnType<AgentCache['getOrCreate']>,
+    prompt: string,
+    controller: AbortController,
+  ) {
+    try {
+      return await run(agentState.agent, prompt, {
+        stream: true,
+        signal: controller.signal,
+        session: agentState.session,
+      });
+    } catch (error: unknown) {
+      if (!isConversationNotFoundError(error)) {
+        throw error;
+      }
+
+      console.warn(`[OpenAI] Stale conversation for chat ${chatId}, creating fresh session`);
+
+      // Clear the stale conversation ID from persistence
+      sessionManager.clearOpenAIConversationId(chatId);
+      // Reset the in-memory session
+      this.agentCache.resetSession(chatId);
+
+      // Retry with fresh session
+      const freshState = this.agentCache.getOrCreate(
+        chatId,
+        agentState.model,
+        agentState.cwd,
+      );
+
+      return await run(freshState.agent, prompt, {
+        stream: true,
+        signal: controller.signal,
+        session: freshState.session,
+      });
+    }
   }
 
   /**
@@ -330,7 +391,19 @@ export class OpenAIProvider implements AgentProvider {
     return undefined;
   }
 
-  clearConversation(chatId: number): void {
+  async clearConversation(chatId: number): Promise<void> {
+    // Clean up remote conversation state
+    const convSession = this.agentCache.getSession(chatId);
+    if (convSession) {
+      try {
+        await convSession.clearSession();
+      } catch (err: unknown) {
+        console.warn('[OpenAI] Failed to clear remote session:', err instanceof Error ? err.message : err);
+      }
+    }
+
+    // Clean up local state
+    sessionManager.clearOpenAIConversationId(chatId);
     this.agentCache.delete(chatId);
     this.chatUsageCache.delete(chatId);
     this.toolCallbackRefs.delete(chatId);
