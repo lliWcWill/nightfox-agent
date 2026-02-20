@@ -386,8 +386,8 @@ function createReadFileTool(cwd: string) {
       'Cannot read sensitive files (.env, keys, credentials).',
     parameters: z.object({
       path: z.string().describe('File path relative to project root, e.g. "src/config.ts"'),
-      offset: z.number().optional().describe('Line number to start reading from (1-indexed)'),
-      limit: z.number().optional().describe('Maximum number of lines to read'),
+      offset: z.number().nullable().describe('Line number to start reading from (1-indexed), or null'),
+      limit: z.number().nullable().describe('Maximum number of lines to read, or null'),
     }),
     execute: async (input) => {
       try {
@@ -405,8 +405,8 @@ function createReadFileTool(cwd: string) {
         const content = await fs.promises.readFile(target, 'utf8');
         let lines = content.split('\n');
 
-        const offset = Math.max(0, (input.offset ?? 1) - 1); // convert to 0-indexed, clamp
-        const limit = input.limit ?? lines.length;
+        const offset = Math.max(0, ((input.offset ?? null) ?? 1) - 1); // convert to 0-indexed, clamp
+        const limit = (input.limit ?? null) ?? lines.length;
         lines = lines.slice(offset, offset + limit);
 
         // Format with line numbers matching Claude's Read tool format
@@ -444,7 +444,7 @@ function createFsuiteOnlyTools(cwd: string) {
       parameters: z.object({
         args: z
           .string()
-          .optional()
+          .nullable()
           .describe('CLI arguments, e.g. "-L 5 src/" or "--recon -o json" or "--snapshot"'),
       }),
       execute: async (input) => {
@@ -465,7 +465,7 @@ function createFsuiteOnlyTools(cwd: string) {
         query: z.string().describe("Glob pattern or file extension to search for, e.g. '*.ts', 'config*', '.log'"),
         args: z
           .string()
-          .optional()
+          .nullable()
           .describe('Additional CLI arguments, e.g. "--output json --max 20 src/"'),
       }),
       execute: async (input) => {
@@ -501,7 +501,7 @@ function createFsuiteOnlyTools(cwd: string) {
       parameters: z.object({
         args: z
           .string()
-          .optional()
+          .nullable()
           .describe('CLI arguments, e.g. "src/" or "-t function -o json" or "-L python src/"'),
       }),
       execute: async (input) => {
@@ -521,7 +521,7 @@ function createFsuiteOnlyTools(cwd: string) {
       parameters: z.object({
         args: z
           .string()
-          .optional()
+          .nullable()
           .describe('CLI arguments, e.g. "stats -o json" or "history --tool ftree --limit 10" or "predict /project"'),
       }),
       execute: async (input) => {

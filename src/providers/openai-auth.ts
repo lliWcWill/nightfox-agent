@@ -2,8 +2,8 @@
  * OpenAI OAuth token management for ChatGPT Pro subscription auth.
  *
  * Uses the Codex CLI's public OAuth PKCE flow to authenticate with
- * the user's ChatGPT Pro account. Tokens are stored locally and
- * refreshed automatically before expiry.
+ * the user's ChatGPT Pro account. The access_token is used directly
+ * as a bearer token with the Codex backend URL — no API key exchange.
  *
  * This allows using your Pro subscription quota instead of API credits.
  */
@@ -15,6 +15,7 @@ import * as crypto from 'node:crypto';
 import * as http from 'node:http';
 import OpenAI from 'openai';
 import { z } from 'zod';
+import { curlFetch } from './curl-fetch.js';
 
 /** OpenAI's public Codex CLI OAuth client ID. */
 const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
@@ -24,14 +25,21 @@ const CALLBACK_PATH = '/auth/callback';
 const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
 const SCOPES = 'openid profile email offline_access';
 
+/** Codex-mode base URL for ChatGPT Pro subscription auth. */
+const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
+
 const TOKEN_FILE = path.join(os.homedir(), '.claudegram', 'openai-auth.json');
 /** Refresh when token expires within this many ms. */
 const REFRESH_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
 
 const tokenSchema = z.object({
+  /** OAuth access token — used directly as bearer. */
   access_token: z.string(),
+  /** OAuth refresh token for obtaining new access tokens. */
   refresh_token: z.string(),
+  /** Expiry timestamp (ms). */
   expires_at: z.number(),
+  /** ChatGPT account ID from the JWT claims. */
   chatgpt_account_id: z.string(),
 });
 
@@ -41,16 +49,50 @@ type StoredTokens = z.infer<typeof tokenSchema>;
 //  Token persistence
 // ---------------------------------------------------------------------------
 
+/** Path to the Codex CLI's auth file — used as fallback token source. */
+const CODEX_AUTH_FILE = path.join(os.homedir(), '.codex', 'auth.json');
+
+const codexAuthSchema = z.object({
+  auth_mode: z.string(),
+  tokens: z.object({
+    access_token: z.string(),
+    refresh_token: z.string(),
+    account_id: z.string(),
+  }),
+});
+
 function loadStoredTokens(): StoredTokens | undefined {
+  // Try our own token file first
   try {
-    if (!fs.existsSync(TOKEN_FILE)) return undefined;
-    const raw = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
-    const result = tokenSchema.safeParse(raw);
-    if (!result.success) {
+    if (fs.existsSync(TOKEN_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+      const result = tokenSchema.safeParse(raw);
+      if (result.success) return result.data;
       console.warn('[OpenAI Auth] Invalid token file, ignoring:', result.error.message);
-      return undefined;
     }
-    return result.data;
+  } catch {
+    // fall through to Codex CLI
+  }
+
+  // Fall back to Codex CLI auth file
+  try {
+    if (!fs.existsSync(CODEX_AUTH_FILE)) return undefined;
+    const raw = JSON.parse(fs.readFileSync(CODEX_AUTH_FILE, 'utf8'));
+    const result = codexAuthSchema.safeParse(raw);
+    if (!result.success) return undefined;
+    if (result.data.auth_mode !== 'chatgpt') return undefined;
+
+    console.log('[OpenAI Auth] Using Codex CLI tokens from ~/.codex/auth.json');
+    const tokens: StoredTokens = {
+      access_token: result.data.tokens.access_token,
+      refresh_token: result.data.tokens.refresh_token,
+      // Access tokens from Codex CLI have ~10 day expiry, set a conservative estimate
+      expires_at: Date.now() + 8 * 24 * 60 * 60 * 1000,
+      chatgpt_account_id: result.data.tokens.account_id,
+    };
+    // Save to our own file so we can track refresh independently
+    saveTokens(tokens);
+    return tokens;
   } catch {
     return undefined;
   }
@@ -93,7 +135,7 @@ function extractAccountId(idToken: string): string {
 //  Token exchange & refresh
 // ---------------------------------------------------------------------------
 
-interface TokenResponse {
+interface OAuthTokenResponse {
   access_token: string;
   refresh_token: string;
   id_token: string;
@@ -119,7 +161,7 @@ async function exchangeCode(code: string, codeVerifier: string): Promise<StoredT
     throw new Error(`Token exchange failed (${response.status}): ${body}`);
   }
 
-  const data = await response.json() as TokenResponse;
+  const data = await response.json() as OAuthTokenResponse;
   const accountId = extractAccountId(data.id_token);
 
   return {
@@ -138,6 +180,7 @@ async function refreshAccessToken(refreshToken: string): Promise<StoredTokens> {
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
       client_id: OAUTH_CLIENT_ID,
+      scope: 'openid profile email',
     }),
   });
 
@@ -146,7 +189,7 @@ async function refreshAccessToken(refreshToken: string): Promise<StoredTokens> {
     throw new Error(`Token refresh failed (${response.status}): ${body}`);
   }
 
-  const data = await response.json() as TokenResponse;
+  const data = await response.json() as OAuthTokenResponse;
   const accountId = extractAccountId(data.id_token);
 
   return {
@@ -174,7 +217,7 @@ export function hasOAuthTokens(): boolean {
 }
 
 /**
- * Get a valid access token, refreshing if needed.
+ * Get valid tokens, refreshing if needed.
  * Returns undefined if no tokens are stored.
  */
 export async function getValidTokens(): Promise<StoredTokens | undefined> {
@@ -192,7 +235,6 @@ export async function getValidTokens(): Promise<StoredTokens | undefined> {
       console.log('[OpenAI Auth] Token refreshed successfully');
     } catch (err) {
       console.error('[OpenAI Auth] Token refresh failed:', err instanceof Error ? err.message : err);
-      // Clear cached tokens — force re-login
       cachedTokens = undefined;
       return undefined;
     }
@@ -203,6 +245,11 @@ export async function getValidTokens(): Promise<StoredTokens | undefined> {
 
 /**
  * Create an OpenAI client authenticated with the user's Pro subscription.
+ * Uses the Codex backend URL with bearer token — no API key needed.
+ *
+ * The Codex backend requires `store: false` on all responses requests,
+ * so we wrap fetch to inject that into every request body.
+ *
  * Returns undefined if no OAuth tokens are available.
  */
 export async function getAuthenticatedClient(): Promise<OpenAI | undefined> {
@@ -211,8 +258,23 @@ export async function getAuthenticatedClient(): Promise<OpenAI | undefined> {
 
   return new OpenAI({
     apiKey: tokens.access_token,
+    baseURL: CODEX_BASE_URL,
     defaultHeaders: {
       'Chatgpt-Account-Id': tokens.chatgpt_account_id,
+    },
+    fetch: async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      // Codex backend rejects store: true — force it to false
+      if (init?.body && typeof init.body === 'string') {
+        try {
+          const body = JSON.parse(init.body) as Record<string, unknown>;
+          body.store = false;
+          init = { ...init, body: JSON.stringify(body) };
+        } catch {
+          // not JSON, pass through
+        }
+      }
+      // Use curl to bypass Cloudflare bot detection on chatgpt.com
+      return curlFetch(url, init);
     },
   });
 }
@@ -254,6 +316,8 @@ export function startOAuthLogin(): Promise<StoredTokens> {
       code_challenge: challenge,
       code_challenge_method: 'S256',
       state,
+      id_token_add_organizations: 'true',
+      codex_cli_simplified_flow: 'true',
     }).toString();
 
   return new Promise((resolve, reject) => {
@@ -311,7 +375,6 @@ export function startOAuthLogin(): Promise<StoredTokens> {
       console.log('Open this URL in your browser:\n');
       console.log(`  ${authUrl}\n`);
       console.log('Waiting for authentication...\n');
-      console.log('(If on a VPS, use: ssh -L 1455:localhost:1455 user@server)\n');
     });
 
     server.on('error', (err) => {

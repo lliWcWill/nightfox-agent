@@ -1,8 +1,9 @@
 /**
  * OpenAI Agents SDK provider.
  *
- * Uses @openai/agents with Agent + run() for streaming, tool execution,
- * and server-managed multi-turn via OpenAIConversationsSession.
+ * Uses @openai/agents with Agent + run() for streaming and tool execution.
+ * Multi-turn context is maintained via local message history — the Codex
+ * backend does not support OpenAIConversationsSession or previousResponseId.
  */
 
 import { run, Agent } from '@openai/agents';
@@ -16,6 +17,7 @@ import { eventBus } from '../dashboard/event-bus.js';
 import { contextMonitor } from '../claude/context-monitor.js';
 import { stripReasoningSummary } from './system-prompt.js';
 import { AgentCache } from './openai-agent-cache.js';
+import type { HistoryItem } from './openai-agent-cache.js';
 import { hasOAuthTokens, getAuthenticatedClient } from './openai-auth.js';
 
 import type {
@@ -85,16 +87,6 @@ interface ToolCallbackRef {
   chatId: number;
 }
 
-/** Check if an error is a stale conversation (404 / not found). */
-function isConversationNotFoundError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  const msg = error.message.toLowerCase();
-  // Check for HTTP 404 or "conversation" + "not found" in error message
-  if (msg.includes('404')) return true;
-  if (msg.includes('conversation') && msg.includes('not found')) return true;
-  return false;
-}
-
 export class OpenAIProvider implements AgentProvider {
   private readonly agentCache = new AgentCache();
   private readonly chatModels = new Map<number, string>();
@@ -114,7 +106,7 @@ export class OpenAIProvider implements AgentProvider {
       throw new Error(
         '[OpenAI] No auth configured. Either:\n' +
         '  1. Set OPENAI_API_KEY in .env, or\n' +
-        '  2. Run: npx tsx scripts/openai-login.ts (to use your ChatGPT Pro account)',
+        '  2. Log in with Codex CLI: codex --login',
       );
     }
   }
@@ -133,7 +125,7 @@ export class OpenAIProvider implements AgentProvider {
     const client = await getAuthenticatedClient();
     if (!client) {
       throw new Error(
-        '[OpenAI] OAuth tokens expired or invalid. Re-run: npx tsx scripts/openai-login.ts',
+        '[OpenAI] OAuth tokens expired or invalid. Re-run: codex --login',
       );
     }
     // Only re-inject if token changed (initial set or post-refresh)
@@ -168,15 +160,15 @@ export class OpenAIProvider implements AgentProvider {
 
     const effectiveModel = model || this.chatModels.get(chatId) || config.OPENAI_DEFAULT_MODEL;
     const contextWindow = getContextWindow(effectiveModel);
+    const dangerousToolsEnabled = config.DANGEROUS_MODE && this.authMode !== 'oauth';
 
     // Get or create a cached Agent instance (invalidates on model/cwd change)
-    // On cold start, load persisted openaiConversationId from session manager
     const agentState = this.agentCache.getOrCreate(
       chatId,
       effectiveModel,
       session.workingDirectory,
       platform,
-      session.openaiConversationId,
+      dangerousToolsEnabled,
     );
 
     const agentStartTime = Date.now();
@@ -204,17 +196,25 @@ export class OpenAIProvider implements AgentProvider {
       // Register lifecycle hooks (idempotent — only attaches once per Agent)
       this.ensureToolHooks(agentState.agent);
 
-      // Run with streaming — uses OpenAIConversationsSession for server-side multi-turn
-      const result = await this.runWithStaleRecovery(
-        chatId,
-        agentState,
-        platform,
-        prompt,
-        controller,
-      );
+      // Build input: accumulated history + new user message
+      const input = this.buildInput(agentState.history, prompt);
+
+      // Run with streaming — no session, local history only
+      const result = await run(agentState.agent, input, {
+        stream: true,
+        signal: controller.signal,
+      } as Parameters<typeof run>[2]);
+
+      // The stream: true overload returns StreamedRunResult
+      const streamed = result as AsyncIterable<RunStreamEvent> & {
+        completed: Promise<void>;
+        newItems: Array<{ type: string; rawItem?: Record<string, unknown> }>;
+        finalOutput?: unknown;
+        state: { usage: { inputTokens: number; outputTokens: number; inputTokensDetails: Array<Record<string, number>> } };
+      };
 
       // Consume the stream for text deltas
-      for await (const event of result) {
+      for await (const event of streamed) {
         this.handleStreamEvent(event, (delta) => {
           fullText += delta;
           onProgress?.(fullText);
@@ -222,10 +222,10 @@ export class OpenAIProvider implements AgentProvider {
       }
 
       // Wait for the run to fully complete
-      await result.completed;
+      await streamed.completed;
 
       // Extract tools used from newItems
-      for (const item of result.newItems) {
+      for (const item of streamed.newItems) {
         if (item.type === 'tool_call_item' && item.rawItem) {
           const raw = item.rawItem;
           if ('name' in raw && typeof raw.name === 'string' && !toolsUsed.includes(raw.name)) {
@@ -235,19 +235,21 @@ export class OpenAIProvider implements AgentProvider {
       }
 
       // If finalOutput is available and fullText is empty (edge case), use it
-      if (!fullText && result.finalOutput) {
-        fullText = String(result.finalOutput);
+      if (!fullText && streamed.finalOutput) {
+        fullText = String(streamed.finalOutput);
       }
 
-      // Persist conversationId after first successful run
-      const convSession = agentState.session;
-      const convId = await convSession.getSessionId();
-      if (convId && convId !== session.openaiConversationId) {
-        sessionManager.setOpenAIConversationId(chatId, convId);
+      // Update local conversation history
+      agentState.history.push({ role: 'user', content: prompt });
+      if (fullText) {
+        agentState.history.push({ role: 'assistant', content: fullText });
       }
+
+      // Trim history to avoid exceeding context window
+      this.trimHistory(agentState.history, contextWindow);
 
       // Extract usage from the run
-      const usage = result.state.usage;
+      const usage = streamed.state.usage;
       const turnCount = this.agentCache.incrementTurn(chatId);
 
       // Sum cached_tokens from inputTokensDetails across all requests
@@ -320,48 +322,37 @@ export class OpenAIProvider implements AgentProvider {
   }
 
   /**
-   * Run with stale session recovery.
-   * If the conversation is not found (404), clear the stale ID, create a
-   * fresh session, and retry once.
+   * Build the input string for run() from conversation history + new message.
+   * Concatenates history into a single string prompt for the model.
+   * The Agent's `instructions` (system prompt) is set separately.
    */
-  private async runWithStaleRecovery(
-    chatId: number,
-    agentState: ReturnType<AgentCache['getOrCreate']>,
-    platform: AgentOptions['platform'],
-    prompt: string,
-    controller: AbortController,
-  ) {
-    try {
-      return await run(agentState.agent, prompt, {
-        stream: true,
-        signal: controller.signal,
-        session: agentState.session,
-      });
-    } catch (error: unknown) {
-      if (!isConversationNotFoundError(error)) {
-        throw error;
-      }
+  private buildInput(
+    history: HistoryItem[],
+    newMessage: string,
+  ): string {
+    if (history.length === 0) {
+      return newMessage;
+    }
+    // Build a conversation transcript the model can follow
+    const transcript = history
+      .map((item) => `${item.role === 'user' ? 'User' : 'Assistant'}: ${item.content}`)
+      .join('\n\n');
+    return `${transcript}\n\nUser: ${newMessage}`;
+  }
 
-      console.warn(`[OpenAI] Stale conversation for chat ${chatId}, creating fresh session`);
-
-      // Clear the stale conversation ID from persistence
-      sessionManager.clearOpenAIConversationId(chatId);
-      // Reset the in-memory session
-      this.agentCache.resetSession(chatId);
-
-      // Retry with fresh session
-      const freshState = this.agentCache.getOrCreate(
-        chatId,
-        agentState.model,
-        agentState.cwd,
-        platform,
-      );
-
-      return await run(freshState.agent, prompt, {
-        stream: true,
-        signal: controller.signal,
-        session: freshState.session,
-      });
+  /**
+   * Trim conversation history to stay within context limits.
+   * Uses a rough 4 chars/token estimate, keeping the most recent messages.
+   */
+  private trimHistory(history: HistoryItem[], contextWindow: number): void {
+    const maxChars = contextWindow * 2; // ~50% of context for history (4 chars/token, halved)
+    let totalChars = 0;
+    for (const item of history) {
+      totalChars += item.content.length;
+    }
+    while (totalChars > maxChars && history.length > 2) {
+      const removed = history.shift();
+      if (removed) totalChars -= removed.content.length;
     }
   }
 
@@ -433,9 +424,8 @@ export class OpenAIProvider implements AgentProvider {
 
   /** Find the current tool callback ref for the chat that owns this Agent. */
   private findCallbackRefForAgent(agent: Agent): ToolCallbackRef | undefined {
-    // Look up the chatId from the agent cache, then get the callback ref
-    for (const [chatId, ref] of this.toolCallbackRefs) {
-      if (this.agentCache.getAgent(chatId) === agent) {
+    for (const [, ref] of this.toolCallbackRefs) {
+      if (this.agentCache.getAgent(ref.chatId) === agent) {
         return ref;
       }
     }
@@ -443,18 +433,6 @@ export class OpenAIProvider implements AgentProvider {
   }
 
   async clearConversation(chatId: number): Promise<void> {
-    // Clean up remote conversation state
-    const convSession = this.agentCache.getSession(chatId);
-    if (convSession) {
-      try {
-        await convSession.clearSession();
-      } catch (err: unknown) {
-        console.warn('[OpenAI] Failed to clear remote session:', err instanceof Error ? err.message : err);
-      }
-    }
-
-    // Clean up local state
-    sessionManager.clearOpenAIConversationId(chatId);
     this.agentCache.delete(chatId);
     this.chatUsageCache.delete(chatId);
     this.toolCallbackRefs.delete(chatId);

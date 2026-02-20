@@ -3,22 +3,31 @@
  *
  * Each chat gets its own Agent instance. The cache invalidates when the model
  * or working directory changes, creating a fresh Agent with updated config.
- * Uses OpenAIConversationsSession for server-side multi-turn persistence.
+ *
+ * Multi-turn context is maintained via local message history (input list),
+ * NOT via OpenAIConversationsSession or previousResponseId — the Codex
+ * backend supports neither.
  */
 
 import { Agent } from '@openai/agents';
-import { OpenAIConversationsSession } from '@openai/agents-openai';
 
 import { config } from '../config.js';
 import { getSystemPrompt } from './system-prompt.js';
 import { createFsuiteTools } from './openai-tools.js';
 import type { Platform } from './types.js';
 
+/** A single item in the conversation history (Responses API input format). */
+export interface HistoryItem {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface ChatAgentState {
   agent: Agent;
   model: string;
   cwd: string;
-  session: OpenAIConversationsSession;
+  /** Local conversation history for multi-turn context. */
+  history: HistoryItem[];
   turnCount: number;
 }
 
@@ -28,15 +37,13 @@ export class AgentCache {
   /**
    * Returns an existing Agent for the chat, or creates a new one.
    * Invalidates if model or cwd changed since last creation.
-   *
-   * @param openaiConversationId - Existing conversation ID to resume (from session persistence)
    */
   getOrCreate(
     chatId: number,
     model: string,
     cwd: string,
     platform: Platform = 'telegram',
-    openaiConversationId?: string,
+    dangerousMode: boolean = config.DANGEROUS_MODE,
   ): ChatAgentState {
     const existing = this.cache.get(chatId);
 
@@ -44,13 +51,8 @@ export class AgentCache {
       return existing;
     }
 
-    // Clean up old session server-side if being replaced (best-effort)
-    if (existing?.session) {
-      existing.session.clearSession().catch(() => {});
-    }
-
     // Create fresh Agent with fsuite tools scoped to cwd
-    const tools = createFsuiteTools(cwd, config.DANGEROUS_MODE);
+    const tools = createFsuiteTools(cwd, dangerousMode);
     const agent = new Agent({
       name: 'claudegram-openai',
       instructions: getSystemPrompt(platform),
@@ -58,30 +60,16 @@ export class AgentCache {
       tools,
     });
 
-    // Resume existing conversation or start fresh
-    const session = new OpenAIConversationsSession(
-      openaiConversationId ? { conversationId: openaiConversationId } : undefined,
-    );
-
     const state: ChatAgentState = {
       agent,
       model,
       cwd,
-      session,
+      history: [],
       turnCount: 0,
     };
 
     this.cache.set(chatId, state);
     return state;
-  }
-
-  /** Replace the session with a fresh one (used for stale session recovery). */
-  resetSession(chatId: number): void {
-    const state = this.cache.get(chatId);
-    if (state) {
-      state.session = new OpenAIConversationsSession();
-      state.turnCount = 0;
-    }
   }
 
   /** Increment and return the new turn count. */
@@ -98,11 +86,6 @@ export class AgentCache {
   /** Get the current turn count for a chat. */
   getTurnCount(chatId: number): number {
     return this.cache.get(chatId)?.turnCount ?? 0;
-  }
-
-  /** Get the session for a chat. */
-  getSession(chatId: number): OpenAIConversationsSession | undefined {
-    return this.cache.get(chatId)?.session;
   }
 
   /** Remove a chat's cached state entirely (used by /clear). */
