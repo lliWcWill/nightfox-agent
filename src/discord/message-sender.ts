@@ -359,6 +359,10 @@ export class DiscordMessageSender {
     const detail = input ? extractToolDetail(toolName, input) : undefined;
     state.currentOperation = { name: toolName, detail };
 
+    // Force an immediate flush so the tool embed is visible even for fast tools.
+    // Without this, tools that complete within the debounce window are never shown.
+    void this.flushUpdate(state);
+
     // Update bot presence with current tool activity
     const client = getDiscordClient();
     if (client?.user) {
@@ -491,10 +495,14 @@ export class DiscordMessageSender {
       fmap: 'Mapping code',
       fmetrics: 'Checking metrics',
       read_file: 'Reading',
+      read: 'Reading',
       // OpenAI dangerous tools
-      shell: 'Running',
+      shell: 'Running command',
+      exec: 'Executing',
+      write: 'Writing file',
+      edit: 'Editing file',
       apply_patch: 'Patching',
-      // MCP memory tools
+      // MCP memory tools (ShieldCortex)
       remember: 'Remembering',
       recall: 'Recalling',
       forget: 'Forgetting',
@@ -504,18 +512,33 @@ export class DiscordMessageSender {
       consolidate: 'Consolidating',
       memory_stats: 'Checking stats',
       get_memory: 'Reading memory',
+      export_memories: 'Exporting memories',
+      import_memories: 'Importing memories',
       get_related: 'Finding related',
       link_memories: 'Linking',
+      set_project: 'Setting project',
+      get_project: 'Getting project',
       detect_contradictions: 'Detecting conflicts',
       graph_query: 'Querying graph',
       graph_entities: 'Listing entities',
       graph_explain: 'Explaining',
+      audit_query: 'Querying audit',
+      quarantine_review: 'Reviewing quarantine',
+      defence_stats: 'Checking defences',
+      scan_memories: 'Scanning memories',
       // MCP Playwright tools
       browser_navigate: 'Navigating',
       browser_snapshot: 'Taking snapshot',
       browser_click: 'Clicking',
       browser_type: 'Typing',
       browser_take_screenshot: 'Screenshotting',
+      browser_close: 'Closing browser',
+      browser_evaluate: 'Evaluating JS',
+      browser_fill_form: 'Filling form',
+      browser_hover: 'Hovering',
+      browser_select_option: 'Selecting option',
+      browser_wait_for: 'Waiting',
+      browser_tabs: 'Managing tabs',
     };
     return actions[toolName] || toolName;
   }

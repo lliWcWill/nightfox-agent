@@ -32,9 +32,13 @@ export const TOOL_ICONS: Record<string, string> = {
   fmap: '🗺️',
   fmetrics: '📊',
   read_file: '📖',
+  read: '📖',
 
   // OpenAI provider — dangerous mode tools
   shell: '💻',
+  exec: '💻',
+  write: '✏️',
+  edit: '🔧',
   apply_patch: '🔧',
 
   // MCP — ShieldCortex memory tools
@@ -47,6 +51,8 @@ export const TOOL_ICONS: Record<string, string> = {
   consolidate: '🔄',
   memory_stats: '📊',
   get_memory: '🧠',
+  export_memories: '📤',
+  import_memories: '📥',
   get_related: '🔗',
   link_memories: '🔗',
   detect_contradictions: '⚡',
@@ -55,6 +61,10 @@ export const TOOL_ICONS: Record<string, string> = {
   graph_explain: '🕸️',
   set_project: '📂',
   get_project: '📂',
+  audit_query: '🔍',
+  quarantine_review: '🛡️',
+  defence_stats: '🛡️',
+  scan_memories: '🔍',
 
   // MCP — Playwright browser tools
   browser_navigate: '🌐',
@@ -62,6 +72,13 @@ export const TOOL_ICONS: Record<string, string> = {
   browser_click: '🖱️',
   browser_type: '⌨️',
   browser_take_screenshot: '📸',
+  browser_close: '❌',
+  browser_evaluate: '💻',
+  browser_fill_form: '📝',
+  browser_hover: '🖱️',
+  browser_select_option: '📋',
+  browser_wait_for: '⏳',
+  browser_tabs: '📑',
 
   // Status indicators
   thinking: '💭',

@@ -220,12 +220,12 @@ export class OpenAIProvider implements AgentProvider {
         state: { usage: { inputTokens: number; outputTokens: number; inputTokensDetails: Array<Record<string, number>> } };
       };
 
-      // Consume the stream for text deltas
+      // Consume the stream for text deltas and tool call notifications
       for await (const event of streamed) {
         this.handleStreamEvent(event, (delta) => {
           fullText += delta;
           onProgress?.(fullText);
-        });
+        }, chatId);
       }
 
       // Wait for the run to fully complete
@@ -362,11 +362,15 @@ export class OpenAIProvider implements AgentProvider {
   }
 
   /**
-   * Process a single stream event, extracting text deltas.
+   * Process a single stream event, extracting text deltas and tool call notifications.
+   *
+   * The SDK's `agent_tool_start` lifecycle hooks don't always fire for MCP tools,
+   * so we also detect tool calls from `run_item_stream_event` as a reliable backup.
    */
   private handleStreamEvent(
     event: RunStreamEvent,
     onDelta: (delta: string) => void,
+    chatId: number,
   ): void {
     if (
       event.type === 'raw_model_stream_event' &&
@@ -375,6 +379,48 @@ export class OpenAIProvider implements AgentProvider {
       const data = event.data;
       if ('delta' in data && typeof data.delta === 'string') {
         onDelta(data.delta);
+      }
+    }
+
+    // Detect tool calls from stream items (reliable for both local and MCP tools)
+    if (event.type === 'run_item_stream_event') {
+      const streamEvent = event as { name: string; item: { type: string; rawItem?: Record<string, unknown> } };
+      const { name, item } = streamEvent;
+
+      if (name === 'tool_call_item_created' && item?.type === 'tool_call_item' && item.rawItem) {
+        const raw = item.rawItem;
+        const toolName = typeof raw.name === 'string' ? raw.name : 'unknown';
+        console.log(`[OpenAI Stream] Tool call: ${toolName}`);
+        let toolInput: Record<string, unknown> | undefined;
+        if (typeof raw.arguments === 'string') {
+          try { toolInput = JSON.parse(raw.arguments) as Record<string, unknown>; } catch { /* partial args */ }
+        }
+
+        const ref = this.toolCallbackRefs.get(chatId);
+        if (ref) {
+          if (!ref.toolsUsed.includes(toolName)) {
+            ref.toolsUsed.push(toolName);
+          }
+          ref.onToolStart?.(toolName, toolInput);
+          eventBus.emit('agent:tool_start', {
+            chatId,
+            toolName,
+            input: toolInput,
+            timestamp: Date.now(),
+          });
+        }
+      }
+
+      if (name === 'tool_output_item_created') {
+        const ref = this.toolCallbackRefs.get(chatId);
+        if (ref) {
+          ref.onToolEnd?.();
+          eventBus.emit('agent:tool_end', {
+            chatId,
+            toolName: 'unknown',
+            timestamp: Date.now(),
+          });
+        }
       }
     }
   }
