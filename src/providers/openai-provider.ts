@@ -161,7 +161,9 @@ export class OpenAIProvider implements AgentProvider {
 
     const effectiveModel = model || this.chatModels.get(chatId) || config.OPENAI_DEFAULT_MODEL;
     const contextWindow = getContextWindow(effectiveModel);
-    const dangerousToolsEnabled = config.DANGEROUS_MODE && this.authMode !== 'oauth';
+    // Dangerous tools are controlled only by DANGEROUS_MODE, regardless of auth mode.
+    // This allows full local tool access even when using OAuth auth.
+    const dangerousToolsEnabled = config.DANGEROUS_MODE;
 
     // Get connected MCP servers (ShieldCortex memory)
     const mcpServers = await mcpManager.getServers();

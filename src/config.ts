@@ -20,9 +20,15 @@ const envSchema = z.object({
   // Agent provider: 'claude' (Claude Agent SDK) or 'openai' (OpenAI Agents SDK)
   AGENT_PROVIDER: z.enum(['claude', 'openai']).default('claude'),
   OPENAI_DEFAULT_MODEL: z.string().default('gpt-5.2'),
-  // MCP memory server (ShieldCortex)
+  // MCP servers
   MCP_MEMORY_COMMAND: z.string().default(''),
-  MCP_MEMORY_ARGS: z.string().default(''),
+  MCP_MEMORY_ARGS: z.string().default(''),  // JSON array, e.g. '["start"]'
+  MCP_PLAYWRIGHT_ENABLED: z
+    .string()
+    .default('false')
+    .transform((val) => val.toLowerCase() === 'true'),
+  MCP_PLAYWRIGHT_COMMAND: z.string().default(''),
+  MCP_PLAYWRIGHT_ARGS: z.string().default(''),  // JSON array, e.g. '["-y","@playwright/mcp@latest","--headless"]'
   WORKSPACE_DIR: z.string().default(process.env.HOME || '.'),
   CLAUDE_EXECUTABLE_PATH: z.string().default('claude'),
   CLAUDE_USE_BUNDLED_EXECUTABLE: z

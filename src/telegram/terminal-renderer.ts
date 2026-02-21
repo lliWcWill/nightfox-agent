@@ -5,25 +5,63 @@
 
 // Tool icons (emoji-based for mobile friendliness)
 export const TOOL_ICONS: Record<string, string> = {
-  // File operations
+  // File operations (Claude SDK names)
   Read: '📖',
   Write: '✏️',
   Edit: '🔧',
 
-  // Search and navigation
+  // Search and navigation (Claude SDK)
   Grep: '🔍',
   Glob: '📁',
 
-  // Execution
+  // Execution (Claude SDK)
   Bash: '💻',
   Task: '📋',
 
-  // Web
+  // Web (Claude SDK)
   WebFetch: '🌐',
   WebSearch: '🔎',
 
-  // Notebook
+  // Notebook (Claude SDK)
   NotebookEdit: '📓',
+
+  // OpenAI provider — fsuite tools
+  ftree: '🌲',
+  fsearch: '🔍',
+  fcontent: '📝',
+  fmap: '🗺️',
+  fmetrics: '📊',
+  read_file: '📖',
+
+  // OpenAI provider — dangerous mode tools
+  shell: '💻',
+  apply_patch: '🔧',
+
+  // MCP — ShieldCortex memory tools
+  remember: '🧠',
+  recall: '🧠',
+  forget: '🗑️',
+  get_context: '🧠',
+  start_session: '▶️',
+  end_session: '⏹️',
+  consolidate: '🔄',
+  memory_stats: '📊',
+  get_memory: '🧠',
+  get_related: '🔗',
+  link_memories: '🔗',
+  detect_contradictions: '⚡',
+  graph_query: '🕸️',
+  graph_entities: '🕸️',
+  graph_explain: '🕸️',
+  set_project: '📂',
+  get_project: '📂',
+
+  // MCP — Playwright browser tools
+  browser_navigate: '🌐',
+  browser_snapshot: '📸',
+  browser_click: '🖱️',
+  browser_type: '⌨️',
+  browser_take_screenshot: '📸',
 
   // Status indicators
   thinking: '💭',
@@ -106,6 +144,7 @@ export function renderToolOperation(toolName: string, detail?: string): string {
  */
 function getToolAction(toolName: string): string {
   const actions: Record<string, string> = {
+    // Claude SDK tools
     Read: 'Reading',
     Write: 'Writing',
     Edit: 'Editing',
@@ -116,6 +155,38 @@ function getToolAction(toolName: string): string {
     WebFetch: 'Fetching',
     WebSearch: 'Searching',
     NotebookEdit: 'Editing notebook',
+    // OpenAI fsuite tools
+    ftree: 'Scanning tree',
+    fsearch: 'Searching files',
+    fcontent: 'Searching content',
+    fmap: 'Mapping code',
+    fmetrics: 'Checking metrics',
+    read_file: 'Reading',
+    // OpenAI dangerous tools
+    shell: 'Running',
+    apply_patch: 'Patching',
+    // MCP memory tools
+    remember: 'Remembering',
+    recall: 'Recalling',
+    forget: 'Forgetting',
+    get_context: 'Loading context',
+    start_session: 'Starting session',
+    end_session: 'Ending session',
+    consolidate: 'Consolidating',
+    memory_stats: 'Checking stats',
+    get_memory: 'Reading memory',
+    get_related: 'Finding related',
+    link_memories: 'Linking',
+    detect_contradictions: 'Detecting conflicts',
+    graph_query: 'Querying graph',
+    graph_entities: 'Listing entities',
+    graph_explain: 'Explaining',
+    // MCP Playwright tools
+    browser_navigate: 'Navigating',
+    browser_snapshot: 'Taking snapshot',
+    browser_click: 'Clicking',
+    browser_type: 'Typing',
+    browser_take_screenshot: 'Screenshotting',
   };
   return actions[toolName] || toolName;
 }
@@ -130,6 +201,7 @@ export function extractToolDetail(toolName: string, input: Record<string, unknow
   };
 
   switch (toolName) {
+    // Claude SDK tools
     case 'Read':
     case 'Write':
     case 'Edit':
@@ -138,7 +210,6 @@ export function extractToolDetail(toolName: string, input: Record<string, unknow
     case 'Bash':
       return truncateCommand(str('command'));
     case 'Grep':
-      return str('pattern');
     case 'Glob':
       return str('pattern');
     case 'WebFetch':
@@ -146,8 +217,54 @@ export function extractToolDetail(toolName: string, input: Record<string, unknow
       return truncateUrl(str('url') || str('query'));
     case 'Task':
       return str('description');
+
+    // OpenAI fsuite tools
+    case 'ftree':
+      return str('args') || 'project root';
+    case 'fsearch':
+      return str('query');
+    case 'fcontent':
+      return str('query');
+    case 'fmap':
+      return str('args');
+    case 'fmetrics':
+      return str('args');
+    case 'read_file':
+      return truncatePath(str('path'));
+
+    // OpenAI dangerous tools
+    case 'shell':
+      return truncateCommand(str('command') || str('commands'));
+    case 'apply_patch':
+      return truncatePath(str('path'));
+
+    // MCP memory tools
+    case 'remember':
+      return str('title');
+    case 'recall':
+      return str('query') || str('mode');
+    case 'forget':
+      return str('query') || str('id')?.toString();
+    case 'get_context':
+      return str('query') || 'loading';
+    case 'get_memory':
+      return str('id')?.toString();
+    case 'graph_query':
+      return str('entity');
+    case 'graph_explain':
+      return `${str('from') || '?'} → ${str('to') || '?'}`;
+
+    // MCP Playwright tools
+    case 'browser_navigate':
+      return truncateUrl(str('url'));
+    case 'browser_click':
+      return str('element') || str('ref');
+    case 'browser_type':
+      return str('text');
+
     default:
-      return undefined;
+      // For any unknown tool, try common param names
+      return str('query') || str('path') || str('url') || str('title') || str('name') || undefined;
   }
 }
 

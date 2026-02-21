@@ -473,6 +473,7 @@ export class DiscordMessageSender {
 
   private getToolAction(toolName: string): string {
     const actions: Record<string, string> = {
+      // Claude SDK tools
       Read: 'Reading',
       Write: 'Writing',
       Edit: 'Editing',
@@ -483,6 +484,38 @@ export class DiscordMessageSender {
       WebFetch: 'Fetching',
       WebSearch: 'Searching web',
       NotebookEdit: 'Editing notebook',
+      // OpenAI fsuite tools
+      ftree: 'Scanning tree',
+      fsearch: 'Searching files',
+      fcontent: 'Searching content',
+      fmap: 'Mapping code',
+      fmetrics: 'Checking metrics',
+      read_file: 'Reading',
+      // OpenAI dangerous tools
+      shell: 'Running',
+      apply_patch: 'Patching',
+      // MCP memory tools
+      remember: 'Remembering',
+      recall: 'Recalling',
+      forget: 'Forgetting',
+      get_context: 'Loading context',
+      start_session: 'Starting session',
+      end_session: 'Ending session',
+      consolidate: 'Consolidating',
+      memory_stats: 'Checking stats',
+      get_memory: 'Reading memory',
+      get_related: 'Finding related',
+      link_memories: 'Linking',
+      detect_contradictions: 'Detecting conflicts',
+      graph_query: 'Querying graph',
+      graph_entities: 'Listing entities',
+      graph_explain: 'Explaining',
+      // MCP Playwright tools
+      browser_navigate: 'Navigating',
+      browser_snapshot: 'Taking snapshot',
+      browser_click: 'Clicking',
+      browser_type: 'Typing',
+      browser_take_screenshot: 'Screenshotting',
     };
     return actions[toolName] || toolName;
   }

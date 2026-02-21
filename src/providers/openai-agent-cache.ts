@@ -57,7 +57,7 @@ export class AgentCache {
     const tools = createFsuiteTools(cwd, dangerousMode);
     const agent = new Agent({
       name: 'claudegram-openai',
-      instructions: getSystemPrompt(platform),
+      instructions: getSystemPrompt(platform, 'openai'),
       model,
       tools,
       mcpServers,

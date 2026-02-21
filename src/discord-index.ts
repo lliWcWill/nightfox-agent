@@ -4,6 +4,7 @@ import { discordConfig } from './discord/discord-config.js';
 import { disconnectAll } from './discord/voice-channel/voice-connection.js';
 import { config } from './config.js';
 import { startDashboardServer, stopDashboardServer } from './dashboard/server.js';
+import { mcpManager } from './providers/openai-mcp.js';
 
 /**
  * Initialize and start the Claudegram Discord bot, register slash commands, optionally start the dashboard, and install a graceful shutdown sequence.
@@ -35,6 +36,9 @@ async function main() {
 
     // Gracefully disconnect all voice sessions first (closes Gemini, kills ffmpeg cleanly)
     await disconnectAll();
+
+    // Close MCP servers (ShieldCortex, Playwright, etc.)
+    await mcpManager.closeAll();
 
     client.destroy();
     process.exit(0);

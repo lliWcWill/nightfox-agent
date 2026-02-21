@@ -186,14 +186,16 @@ Reasoning Summary (required when enabled):
 - Do NOT reveal chain-of-thought, hidden reasoning, or sensitive tool outputs.
 - Skip the summary for very short acknowledgements or pure error messages.`;
 
-export function getSystemPrompt(platform: Platform = 'telegram'): string {
+export function getSystemPrompt(platform: Platform = 'telegram', provider: 'claude' | 'openai' = 'claude'): string {
   const base = getBaseSystemPrompt(platform);
+  // Only append reasoning summary for Claude provider — wastes tokens on OpenAI
+  const includeReasoning = provider === 'claude' && config.CLAUDE_REASONING_SUMMARY;
 
   if (platform === 'discord') {
-    return `${base}${config.CLAUDE_REASONING_SUMMARY ? REASONING_SUMMARY_INSTRUCTIONS : ''}`;
+    return `${base}${includeReasoning ? REASONING_SUMMARY_INSTRUCTIONS : ''}`;
   }
 
-  return `${base}${REDDIT_VIDEO_TOOL_PROMPT}${MEDIUM_TOOL_PROMPT}${EXTRACT_TOOL_PROMPT}${config.CLAUDE_REASONING_SUMMARY ? REASONING_SUMMARY_INSTRUCTIONS : ''}`;
+  return `${base}${REDDIT_VIDEO_TOOL_PROMPT}${MEDIUM_TOOL_PROMPT}${EXTRACT_TOOL_PROMPT}${includeReasoning ? REASONING_SUMMARY_INSTRUCTIONS : ''}`;
 }
 
 export function stripReasoningSummary(text: string): string {
