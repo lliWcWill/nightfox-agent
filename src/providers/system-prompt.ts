@@ -26,7 +26,21 @@ You have access to a persistent memory system via MCP tools. Use these tools to:
 - **detect_contradictions**: Find conflicting information in your memories
 - **graph_query/graph_entities/graph_explain**: Explore the knowledge graph
 
-Proactively use memory to maintain continuity across conversations. When the user mentions preferences, important decisions, or asks you to remember something, store it. When answering questions, check your memory first for relevant context.`;
+Proactively use memory to maintain continuity across conversations. When the user mentions preferences, important decisions, or asks you to remember something, store it. When answering questions, check your memory first for relevant context.
+
+Browser Tools (Playwright MCP):
+You have access to a headless browser via Playwright MCP tools. Use these to:
+- **browser_navigate**: Navigate to a URL
+- **browser_snapshot**: Capture accessibility snapshot of a page (better than screenshot for reading content)
+- **browser_take_screenshot**: Take a visual screenshot
+- **browser_click**: Click elements on the page
+- **browser_type**: Type text into form fields
+- **browser_fill_form**: Fill multiple form fields at once
+- **browser_evaluate**: Run JavaScript on the page
+- **browser_wait_for**: Wait for text to appear/disappear
+- **browser_tabs**: Manage browser tabs
+
+Use the browser when the user asks you to visit websites, scrape content, fill forms, or interact with web pages.`;
 
   if (platform === 'discord') {
     return `${commonGuidelines}

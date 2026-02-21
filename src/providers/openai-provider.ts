@@ -144,6 +144,8 @@ export class OpenAIProvider implements AgentProvider {
   ): Promise<AgentResponse> {
     const { onProgress, onToolStart, onToolEnd, abortController, command, model, platform } = options;
 
+    console.log(`[OpenAI] send() chatId=${chatId} prompt="${message.slice(0, 120)}..." command=${command || 'chat'}`);
+
     // Ensure OAuth client is initialized (no-op for API key auth)
     await this.ensureOAuthClient();
 
@@ -165,8 +167,11 @@ export class OpenAIProvider implements AgentProvider {
     // This allows full local tool access even when using OAuth auth.
     const dangerousToolsEnabled = config.DANGEROUS_MODE;
 
+    console.log(`[OpenAI] model=${effectiveModel} dangerous=${dangerousToolsEnabled} cwd=${session.workingDirectory}`);
+
     // Get connected MCP servers (ShieldCortex memory)
     const mcpServers = await mcpManager.getServers();
+    console.log(`[OpenAI] MCP servers: ${mcpServers.length > 0 ? mcpServers.map(s => s.name).join(', ') : 'none'}`);
 
     // Get or create a cached Agent instance (invalidates on model/cwd change)
     const agentState = this.agentCache.getOrCreate(
@@ -207,6 +212,7 @@ export class OpenAIProvider implements AgentProvider {
       const input = this.buildInput(agentState.history, prompt);
 
       // Run with streaming — no session, local history only
+      console.log(`[OpenAI] Starting run() with ${input.length} input items`);
       const result = await run(agentState.agent, input, {
         stream: true,
         signal: controller.signal,
@@ -230,6 +236,7 @@ export class OpenAIProvider implements AgentProvider {
 
       // Wait for the run to fully complete
       await streamed.completed;
+      console.log(`[OpenAI] Stream completed, ${fullText.length} chars response`);
 
       // Extract tools used from newItems
       for (const item of streamed.newItems) {
@@ -240,6 +247,8 @@ export class OpenAIProvider implements AgentProvider {
           }
         }
       }
+      console.log(`[OpenAI] newItems: ${streamed.newItems.length} items, types: ${[...new Set(streamed.newItems.map(i => i.type))].join(', ') || 'none'}`);
+      console.log(`[OpenAI] Tools used: ${toolsUsed.length > 0 ? toolsUsed.join(', ') : 'none'}`);
 
       // If finalOutput is available and fullText is empty (edge case), use it
       if (!fullText && streamed.finalOutput) {
@@ -312,12 +321,18 @@ export class OpenAIProvider implements AgentProvider {
       this.chatUsageCache.set(chatId, resultUsage);
     }
 
+    const durationMs = Date.now() - agentStartTime;
+    console.log(`[OpenAI] Complete: ${fullText.length} chars, ${toolsUsed.length} tools [${toolsUsed.join(', ')}], ${durationMs}ms`);
+    if (resultUsage) {
+      console.log(`[OpenAI] Usage: ${resultUsage.inputTokens} in / ${resultUsage.outputTokens} out / ${resultUsage.cacheReadTokens} cached`);
+    }
+
     eventBus.emit('agent:complete', {
       chatId,
       text: fullText.slice(0, 500),
       toolsUsed,
       usage: resultUsage,
-      durationMs: Date.now() - agentStartTime,
+      durationMs,
       timestamp: Date.now(),
     });
 
@@ -372,6 +387,17 @@ export class OpenAIProvider implements AgentProvider {
     onDelta: (delta: string) => void,
     chatId: number,
   ): void {
+    // Log non-text-delta events for visibility (text deltas are too noisy)
+    if (event.type === 'run_item_stream_event') {
+      const se = event as { name: string; item?: { type: string; rawItem?: Record<string, unknown> } };
+      const toolName = se.item?.rawItem && typeof se.item.rawItem.name === 'string' ? ` tool=${se.item.rawItem.name}` : '';
+      console.log(`[OpenAI Stream] ${se.name} (${se.item?.type || 'unknown'})${toolName}`);
+    } else if (event.type === 'raw_model_stream_event' && event.data.type !== 'output_text_delta') {
+      // Log raw events that aren't text deltas (function calls, reasoning, etc.)
+      const rawType = event.data.type;
+      console.log(`[OpenAI Raw] ${rawType}`);
+    }
+
     if (
       event.type === 'raw_model_stream_event' &&
       event.data.type === 'output_text_delta'
