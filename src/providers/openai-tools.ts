@@ -3,9 +3,9 @@
  *
  * Provides two tiers:
  *   - Always: fsuite CLI tools (ftree, fsearch, fcontent, fmap, fmetrics) + read_file
- *   - DANGEROUS_MODE only: shellTool (exec) + applyPatchTool (file editing)
+ *   - DANGEROUS_MODE only: custom function tools for shell/write/edit/patch
  *
- * Shell tool uses child_process.exec intentionally — Shell.run() receives full
+ * Shell tool uses child_process.exec intentionally — tool input is a full shell
  * command strings that may contain pipes, redirects, etc. This is gated behind
  * DANGEROUS_MODE=true, matching Claude provider's bypassPermissions behavior.
  */
@@ -14,19 +14,28 @@ import { exec, execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { tool, shellTool, applyPatchTool } from '@openai/agents';
+import { tool } from '@openai/agents';
 import { z } from 'zod';
 
 import { resolveBin } from '../utils/resolve-bin.js';
 
-import type { Shell, ShellAction, ShellResult, ShellOutputResult } from '@openai/agents';
-import type { Editor, ApplyPatchResult } from '@openai/agents';
 import type { Tool } from '@openai/agents-core';
 
 /** Maximum bytes of tool output before truncation. */
 const MAX_OUTPUT_BYTES = 32_000;
 /** Per-tool execution timeout in ms. */
 const TOOL_TIMEOUT_MS = 30_000;
+
+interface ShellCommandResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+type PatchOperationResult = {
+  status: 'completed' | 'failed';
+  output: string;
+};
 
 // ---------------------------------------------------------------------------
 //  Path validation
@@ -183,27 +192,27 @@ function runCli(
  * Uses exec() intentionally — Shell.run() receives full shell command strings.
  * Gated behind DANGEROUS_MODE=true at tool registration level.
  */
-class LocalShell implements Shell {
+class LocalShell {
   constructor(private readonly cwd: string) {}
 
-  async run(action: ShellAction): Promise<ShellResult> {
-    const timeout = action.timeoutMs ?? TOOL_TIMEOUT_MS;
-    const maxOutput = action.maxOutputLength ?? MAX_OUTPUT_BYTES;
-    const output: ShellOutputResult[] = [];
-
-    for (const command of action.commands) {
-      const result = await this.execCommand(command, timeout, maxOutput);
+  async run(
+    commands: string[],
+    timeoutMs: number = TOOL_TIMEOUT_MS,
+    maxOutputLength: number = MAX_OUTPUT_BYTES,
+  ): Promise<ShellCommandResult[]> {
+    const output: ShellCommandResult[] = [];
+    for (const command of commands) {
+      const result = await this.execCommand(command, timeoutMs, maxOutputLength);
       output.push(result);
     }
-
-    return { output, maxOutputLength: maxOutput };
+    return output;
   }
 
   private execCommand(
     command: string,
     timeout: number,
     maxOutput: number,
-  ): Promise<ShellOutputResult> {
+  ): Promise<ShellCommandResult> {
     return new Promise((resolve) => {
       exec(
         command,
@@ -215,7 +224,7 @@ class LocalShell implements Shell {
           resolve({
             stdout: truncateByBytes(String(stdout), maxOutput),
             stderr: truncateByBytes(String(stderr), maxOutput),
-            outcome: { type: 'exit', exitCode },
+            exitCode,
           });
         },
       );
@@ -232,17 +241,24 @@ class LocalShell implements Shell {
  * Handles create/update/delete file operations with V4A unified diffs.
  * All paths validated against the project root via realpathSync.
  */
-class LocalEditor implements Editor {
+class LocalEditor {
   constructor(private readonly cwd: string) {}
 
   async createFile(
-    operation: { type: 'create_file'; path: string; diff: string },
-  ): Promise<ApplyPatchResult> {
+    operation: { type: 'create_file'; path: string; diff?: string; content?: string },
+  ): Promise<PatchOperationResult> {
     try {
       const target = validatePath(this.cwd, operation.path, true);
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
-      // V4A diff for create_file contains the full file content after the diff header
-      const content = extractContentFromDiff(operation.diff);
+      const content =
+        typeof operation.content === 'string'
+          ? operation.content
+          : operation.diff
+            ? extractContentFromDiff(operation.diff)
+            : undefined;
+      if (typeof content !== 'string') {
+        throw new Error('create_file requires either content or diff');
+      }
       await fs.promises.writeFile(target, content, 'utf8');
       return { status: 'completed', output: `Created ${operation.path}` };
     } catch (err) {
@@ -252,7 +268,7 @@ class LocalEditor implements Editor {
 
   async updateFile(
     operation: { type: 'update_file'; path: string; diff: string },
-  ): Promise<ApplyPatchResult> {
+  ): Promise<PatchOperationResult> {
     try {
       const target = validatePath(this.cwd, operation.path);
       const original = await fs.promises.readFile(target, 'utf8');
@@ -266,7 +282,7 @@ class LocalEditor implements Editor {
 
   async deleteFile(
     operation: { type: 'delete_file'; path: string },
-  ): Promise<ApplyPatchResult> {
+  ): Promise<PatchOperationResult> {
     try {
       const target = validatePath(this.cwd, operation.path);
       await fs.promises.unlink(target);
@@ -374,8 +390,51 @@ function applyUnifiedDiff(original: string, diff: string): string {
 }
 
 // ---------------------------------------------------------------------------
-//  read_file tool (always available)
+//  File + shell tools (function tools only)
 // ---------------------------------------------------------------------------
+
+const readFileInputSchema = z.object({
+  path: z.string().describe('File path relative to project root, e.g. "src/config.ts"'),
+  offset: z.number().nullable().optional().describe('Line number to start reading from (1-indexed), or null'),
+  limit: z.number().nullable().optional().describe('Maximum number of lines to read, or null'),
+});
+
+async function readFileWithLineNumbers(
+  cwd: string,
+  input: z.infer<typeof readFileInputSchema>,
+): Promise<string> {
+  try {
+    const target = validatePath(cwd, input.path);
+
+    if (isSensitiveFile(target)) {
+      return '[denied] Cannot read sensitive files';
+    }
+
+    const stat = await fs.promises.stat(target);
+    if (stat.isDirectory()) {
+      return '[error] Path is a directory, not a file. Use ftree to explore directories.';
+    }
+
+    const content = await fs.promises.readFile(target, 'utf8');
+    let lines = content.split('\n');
+
+    const offset = Math.max(0, ((input.offset ?? null) ?? 1) - 1);
+    const limit = (input.limit ?? null) ?? lines.length;
+    lines = lines.slice(offset, offset + limit);
+
+    const formatted = lines
+      .map((line, i) => {
+        const lineNum = String(offset + i + 1).padStart(6, ' ');
+        return `${lineNum}→${line}`;
+      })
+      .join('\n');
+
+    return truncateByBytes(formatted, MAX_OUTPUT_BYTES);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `[error] read failed: ${msg}`;
+  }
+}
 
 function createReadFileTool(cwd: string) {
   return tool({
@@ -384,44 +443,164 @@ function createReadFileTool(cwd: string) {
       'Read a file from the project directory. Returns contents with line numbers. ' +
       'The path must be relative to the project root or an absolute path within it. ' +
       'Cannot read sensitive files (.env, keys, credentials).',
+    parameters: readFileInputSchema,
+    execute: async (input) => readFileWithLineNumbers(cwd, input),
+  });
+}
+
+function createReadTool(cwd: string) {
+  return tool({
+    name: 'read',
+    description:
+      'Read a file with line numbers. Alias of read_file for Codex-style tool names.',
+    parameters: readFileInputSchema,
+    execute: async (input) => readFileWithLineNumbers(cwd, input),
+  });
+}
+
+function createWriteTool(cwd: string) {
+  return tool({
+    name: 'write',
+    description:
+      'Write content to a file (creates parent directories as needed). Overwrites existing file content.',
     parameters: z.object({
-      path: z.string().describe('File path relative to project root, e.g. "src/config.ts"'),
-      offset: z.number().nullable().describe('Line number to start reading from (1-indexed), or null'),
-      limit: z.number().nullable().describe('Maximum number of lines to read, or null'),
+      path: z.string().describe('File path relative to project root'),
+      content: z.string().describe('Full file content to write'),
     }),
+    execute: async ({ path: filePath, content }) => {
+      try {
+        const target = validatePath(cwd, filePath, true);
+        await fs.promises.mkdir(path.dirname(target), { recursive: true });
+        await fs.promises.writeFile(target, content, 'utf8');
+        return `Wrote ${filePath}`;
+      } catch (err) {
+        return `[error] write failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    },
+  });
+}
+
+function createEditTool(cwd: string) {
+  return tool({
+    name: 'edit',
+    description:
+      'Edit a file using string replacement. Replaces the first match by default.',
+    parameters: z.object({
+      path: z.string().describe('File path relative to project root'),
+      old_text: z.string().describe('Text to replace'),
+      new_text: z.string().describe('Replacement text'),
+      replace_all: z.boolean().nullable().describe('Replace all matches (default false)'),
+    }),
+    execute: async ({ path: filePath, old_text, new_text, replace_all }) => {
+      try {
+        const target = validatePath(cwd, filePath);
+        const content = await fs.promises.readFile(target, 'utf8');
+        if (!content.includes(old_text)) {
+          return `[error] edit failed: text not found in ${filePath}`;
+        }
+        const updated = replace_all ? content.split(old_text).join(new_text) : content.replace(old_text, new_text);
+        await fs.promises.writeFile(target, updated, 'utf8');
+        return `Edited ${filePath}`;
+      } catch (err) {
+        return `[error] edit failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    },
+  });
+}
+
+function createShellFunctionTool(cwd: string, name: 'shell' | 'exec') {
+  const shell = new LocalShell(cwd);
+  const schema = z.object({
+    commands: z.array(z.string()).nullable().optional().describe('Commands to execute in order'),
+    command: z.string().nullable().optional().describe('Single command to execute'),
+    timeout_ms: z.number().nullable().optional().describe('Per-command timeout in ms (default 30000)'),
+    max_output_bytes: z.number().nullable().optional().describe('Max stdout/stderr bytes per command (default 32000)'),
+  });
+
+  return tool({
+    name,
+    description:
+      'Run shell commands in the project working directory. Supports pipes, redirects, and shell syntax.',
+    parameters: schema,
     execute: async (input) => {
       try {
-        const target = validatePath(cwd, input.path);
-
-        if (isSensitiveFile(target)) {
-          return '[denied] Cannot read sensitive files';
+        const commands = (input.commands ?? []).filter((c): c is string => typeof c === 'string' && c.trim().length > 0);
+        if (input.command && input.command.trim().length > 0) {
+          commands.push(input.command);
+        }
+        if (commands.length === 0) {
+          return '[error] shell requires command or commands';
         }
 
-        const stat = await fs.promises.stat(target);
-        if (stat.isDirectory()) {
-          return '[error] Path is a directory, not a file. Use ftree to explore directories.';
-        }
+        const timeout = input.timeout_ms ?? TOOL_TIMEOUT_MS;
+        const maxOutput = input.max_output_bytes ?? MAX_OUTPUT_BYTES;
+        const results = await shell.run(commands, timeout, maxOutput);
 
-        const content = await fs.promises.readFile(target, 'utf8');
-        let lines = content.split('\n');
-
-        const offset = Math.max(0, ((input.offset ?? null) ?? 1) - 1); // convert to 0-indexed, clamp
-        const limit = (input.limit ?? null) ?? lines.length;
-        lines = lines.slice(offset, offset + limit);
-
-        // Format with line numbers matching Claude's Read tool format
-        const formatted = lines
-          .map((line, i) => {
-            const lineNum = String(offset + i + 1).padStart(6, ' ');
-            return `${lineNum}→${line}`;
+        return results
+          .map((result, idx) => {
+            const chunks = [
+              `$ ${commands[idx]}`,
+              `exit_code: ${result.exitCode}`,
+            ];
+            if (result.stdout) chunks.push(`stdout:\n${result.stdout}`);
+            if (result.stderr) chunks.push(`stderr:\n${result.stderr}`);
+            return chunks.join('\n');
           })
-          .join('\n');
-
-        return truncateByBytes(formatted, MAX_OUTPUT_BYTES);
+          .join('\n\n');
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return `[error] read_file failed: ${msg}`;
+        return `[error] shell failed: ${err instanceof Error ? err.message : String(err)}`;
       }
+    },
+  });
+}
+
+function createApplyPatchFunctionTool(cwd: string) {
+  const editor = new LocalEditor(cwd);
+
+  const createFileSchema = z.object({
+    type: z.literal('create_file'),
+    path: z.string(),
+    content: z.string().nullable().optional().describe('Full file content for new file'),
+    diff: z.string().nullable().optional().describe('Optional V4A diff for create operation'),
+  });
+  const updateFileSchema = z.object({
+    type: z.literal('update_file'),
+    path: z.string(),
+    diff: z.string().describe('V4A unified diff to apply'),
+  });
+  const deleteFileSchema = z.object({
+    type: z.literal('delete_file'),
+    path: z.string(),
+  });
+  const operationSchema = z.union([createFileSchema, updateFileSchema, deleteFileSchema]);
+
+  return tool({
+    name: 'apply_patch',
+    description:
+      'Apply file patch operations (create_file, update_file, delete_file). ' +
+      'update_file requires a V4A unified diff.',
+    parameters: z.object({
+      operations: z.array(operationSchema).min(1),
+    }),
+    execute: async ({ operations }) => {
+      const outputs: string[] = [];
+      for (const op of operations) {
+        let result: PatchOperationResult;
+        if (op.type === 'create_file') {
+          result = await editor.createFile({
+            type: 'create_file',
+            path: op.path,
+            content: op.content ?? undefined,
+            diff: op.diff ?? undefined,
+          });
+        } else if (op.type === 'update_file') {
+          result = await editor.updateFile(op);
+        } else {
+          result = await editor.deleteFile(op);
+        }
+        outputs.push(`${result.status}: ${result.output}`);
+      }
+      return outputs.join('\n');
     },
   });
 }
@@ -547,15 +726,16 @@ export function createFsuiteTools(cwd: string, dangerousMode: boolean): Tool[] {
   const tools: Tool[] = [
     ...createFsuiteOnlyTools(cwd),
     createReadFileTool(cwd),
+    createReadTool(cwd),
   ];
 
   if (dangerousMode) {
-    const shell = new LocalShell(cwd);
-    const editor = new LocalEditor(cwd);
-
     tools.push(
-      shellTool({ shell, needsApproval: false }),
-      applyPatchTool({ editor, needsApproval: false }),
+      createShellFunctionTool(cwd, 'shell'),
+      createShellFunctionTool(cwd, 'exec'),
+      createWriteTool(cwd),
+      createEditTool(cwd),
+      createApplyPatchFunctionTool(cwd),
     );
   }
 

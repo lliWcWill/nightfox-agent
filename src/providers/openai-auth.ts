@@ -15,7 +15,6 @@ import * as crypto from 'node:crypto';
 import * as http from 'node:http';
 import OpenAI from 'openai';
 import { z } from 'zod';
-import { curlFetch } from './curl-fetch.js';
 
 /** OpenAI's public Codex CLI OAuth client ID. */
 const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
@@ -260,21 +259,32 @@ export async function getAuthenticatedClient(): Promise<OpenAI | undefined> {
     apiKey: tokens.access_token,
     baseURL: CODEX_BASE_URL,
     defaultHeaders: {
-      'Chatgpt-Account-Id': tokens.chatgpt_account_id,
+      'chatgpt-account-id': tokens.chatgpt_account_id,
+      'OpenAI-Beta': 'responses=experimental',
+      originator: 'pi',
     },
     fetch: async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
-      // Codex backend rejects store: true — force it to false
+      // Codex backend rejects store: true — force it to false.
+      // Keep request shape compatible with Codex responses transport.
       if (init?.body && typeof init.body === 'string') {
         try {
           const body = JSON.parse(init.body) as Record<string, unknown>;
           body.store = false;
+          if (body.stream === undefined) {
+            body.stream = true;
+          }
+          if (body.parallel_tool_calls === undefined) {
+            body.parallel_tool_calls = true;
+          }
+          if (body.tool_choice === undefined) {
+            body.tool_choice = 'auto';
+          }
           init = { ...init, body: JSON.stringify(body) };
         } catch {
           // not JSON, pass through
         }
       }
-      // Use curl to bypass Cloudflare bot detection on chatgpt.com
-      return curlFetch(url, init);
+      return fetch(url, init);
     },
   });
 }
