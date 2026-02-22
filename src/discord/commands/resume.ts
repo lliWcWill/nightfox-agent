@@ -9,7 +9,6 @@ import {
 import * as path from 'path';
 import { discordChatId } from '../id-mapper.js';
 import { sessionManager } from '../../claude/session-manager.js';
-import { clearConversation } from '../../claude/agent.js';
 
 const COLLECTOR_TIMEOUT_MS = 60_000;
 
@@ -107,7 +106,8 @@ export async function handleResume(interaction: ChatInputCommandInteraction): Pr
       return;
     }
 
-    clearConversation(chatId);
+    // IMPORTANT: Do NOT clear conversation on /resume.
+    // /resume is meant to restore a previous session's context.
 
     const projectName = path.basename(session.workingDirectory);
     let msg = `Resumed **${projectName}**\n\nWorking directory: \`${session.workingDirectory}\``;

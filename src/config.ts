@@ -27,6 +27,9 @@ const envSchema = z.object({
     .string()
     .default('false')
     .transform((val) => val.toLowerCase() === 'true'),
+  // ShieldCortex project scope — must match Claude Code's project name so
+  // the bot's agent sees the same memories.  Auto-detected from CWD if empty.
+  MCP_MEMORY_PROJECT: z.string().default(''),
   MCP_PLAYWRIGHT_COMMAND: z.string().default(''),
   MCP_PLAYWRIGHT_ARGS: z.string().default(''),  // JSON array, e.g. '["-y","@playwright/mcp@latest","--headless"]'
   WORKSPACE_DIR: z.string().default(process.env.HOME || '.'),

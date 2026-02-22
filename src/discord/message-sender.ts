@@ -87,7 +87,7 @@ const THINKING_FRAMES = [
   { dots: '◉○◉', text: 'Thinking.' },
 ];
 const EMBED_MAX_DESCRIPTION = 4096;
-const MAX_EMBEDS_PER_MESSAGE = 10;
+const MAX_EMBEDS_PER_MESSAGE = 25; // bumped from 10; batching still respects Discord 6000-char/embed-batch limit
 const PLAIN_TEXT_THRESHOLD = 2000; // Under this: plain markdown message
 // Discord limits total chars across ALL embeds in one message to 6000
 const EMBED_TOTAL_CHAR_LIMIT = 6000;
@@ -166,17 +166,6 @@ function buildThinkingEmbed(frameIndex: number): EmbedBuilder {
     .setDescription(`**${frame.dots}** ${frame.text}`);
 }
 
-/**
- * Create an embed describing a tool's active operation, including a spinner frame, tool icon, action label, optional detail, and an optional content footer.
- *
- * @param spinnerIndex - Index into the spinner frames used to select the spinner glyph
- * @param toolName - Tool identifier used to derive the icon displayed in the embed
- * @param action - Human-friendly action label (e.g., "Reading", "Running")
- * @param detail - Optional additional detail shown after the action
- * @param contentLength - When greater than zero, adds a footer showing the character count
- * @param lineCount - When `contentLength > 0`, the number of lines displayed in the footer alongside the character count
- * @returns An EmbedBuilder with TOOL_COLOR, a description containing the spinner, icon, bolded action and optional detail, and a footer formatted as "`{chars} chars | {lines} lines`" when content length is provided
- */
 function buildToolEmbed(
   spinnerIndex: number,
   toolName: string,
@@ -199,17 +188,10 @@ function buildToolEmbed(
 export class DiscordMessageSender {
   private streamStates: Map<string, DiscordStreamState> = new Map();
 
-  /**
-   * Check if a channel currently has an active stream.
-   */
   isStreaming(channelId: string): boolean {
     return this.streamStates.has(channelId);
   }
 
-  /**
-   * Register a deferred interaction as a stream state so streaming
-   * updates and finishStreaming work against it.
-   */
   registerDeferredInteraction(interaction: ChatInputCommandInteraction, channelId: string): void {
     const state: DiscordStreamState = {
       channelId,
@@ -228,10 +210,6 @@ export class DiscordMessageSender {
     this.streamStates.set(channelId, state);
   }
 
-  /**
-   * Start streaming for a slash command interaction.
-   * Calls deferReply() and stores state.
-   */
   async startStreaming(interaction: ChatInputCommandInteraction, channelId: string): Promise<void> {
     await interaction.deferReply();
 
@@ -253,12 +231,7 @@ export class DiscordMessageSender {
     this.streamStates.set(channelId, state);
   }
 
-  /**
-   * Start streaming for a follow-up thread message.
-   * Sends an initial "thinking" message to edit in place.
-   */
   async startStreamingFromMessage(message: Message, channelId: string): Promise<void> {
-    // Reply to the user's message with an animated thinking embed
     const thinkingMsg = await message.reply({ embeds: [buildThinkingEmbed(0)] });
 
     const state: DiscordStreamState = {
@@ -279,10 +252,6 @@ export class DiscordMessageSender {
     this.streamStates.set(channelId, state);
   }
 
-  /**
-   * Start streaming by editing an existing message in-place.
-   * Used when the caller has already sent a "Thinking..." message (e.g. in a thread).
-   */
   async startStreamingFromExistingMessage(message: Message, channelId: string): Promise<void> {
     const state: DiscordStreamState = {
       channelId,
@@ -302,10 +271,6 @@ export class DiscordMessageSender {
     this.streamStates.set(channelId, state);
   }
 
-  /**
-   * Start streaming as a regular message (not a reply) in a channel/thread.
-   * Used for thread follow-ups where the bot should NOT inline-reply.
-   */
   async startStreamingInChannel(channel: TextBasedChannel & { send: (...args: any[]) => Promise<Message> }, channelId: string): Promise<void> {
     const thinkingMsg = await channel.send({ embeds: [buildThinkingEmbed(0)] });
 
@@ -349,9 +314,6 @@ export class DiscordMessageSender {
     }
   }
 
-  /**
-   * Update the current tool operation (terminal UI style).
-   */
   updateToolOperation(channelId: string, toolName: string, input?: Record<string, unknown>): void {
     const state = this.streamStates.get(channelId);
     if (!state) return;
@@ -359,11 +321,8 @@ export class DiscordMessageSender {
     const detail = input ? extractToolDetail(toolName, input) : undefined;
     state.currentOperation = { name: toolName, detail };
 
-    // Force an immediate flush so the tool embed is visible even for fast tools.
-    // Without this, tools that complete within the debounce window are never shown.
     void this.flushUpdate(state);
 
-    // Update bot presence with current tool activity
     const client = getDiscordClient();
     if (client?.user) {
       const action = this.getToolAction(toolName);
@@ -372,9 +331,6 @@ export class DiscordMessageSender {
     }
   }
 
-  /**
-   * Clear the current tool operation.
-   */
   clearToolOperation(channelId: string): void {
     const state = this.streamStates.get(channelId);
     if (!state) return;
@@ -386,10 +342,6 @@ export class DiscordMessageSender {
     }
   }
 
-  /**
-   * Update stream content with debouncing.
-   * Streaming updates use plain text (fast, no formatting overhead).
-   */
   async updateStream(channelId: string, content: string): Promise<void> {
     const state = this.streamStates.get(channelId);
     if (!state) return;
@@ -423,7 +375,6 @@ export class DiscordMessageSender {
     let embed: EmbedBuilder | undefined;
 
     if (state.currentOperation) {
-      // Tool is active — show as a colored embed
       const action = this.getToolAction(state.currentOperation.name);
       const detail = state.currentOperation.detail || undefined;
       const lines = state.content ? state.content.split('\n').length : 0;
@@ -436,7 +387,6 @@ export class DiscordMessageSender {
         lines,
       );
     } else if (state.content) {
-      // Text streaming — show tail of content as plain text (fast, readable)
       if (state.content.length <= maxLen) {
         content = state.content;
       } else {
@@ -445,13 +395,11 @@ export class DiscordMessageSender {
         content = `*... (${state.content.length.toLocaleString()} chars)*\n${clean}`;
       }
     } else {
-      // No tool, no content — animated thinking embed
       embed = buildThinkingEmbed(state.spinnerIndex);
     }
 
-    // Serialize through editLock to prevent concurrent Discord API edits
     state.editLock = state.editLock.then(async () => {
-      if (state.finished) return; // Re-check after waiting for lock
+      if (state.finished) return;
       try {
         const payload = embed
           ? { content: '', embeds: [embed] }
@@ -477,7 +425,6 @@ export class DiscordMessageSender {
 
   private getToolAction(toolName: string): string {
     const actions: Record<string, string> = {
-      // Claude SDK tools
       Read: 'Reading',
       Write: 'Writing',
       Edit: 'Editing',
@@ -488,7 +435,6 @@ export class DiscordMessageSender {
       WebFetch: 'Fetching',
       WebSearch: 'Searching web',
       NotebookEdit: 'Editing notebook',
-      // OpenAI fsuite tools
       ftree: 'Scanning tree',
       fsearch: 'Searching files',
       fcontent: 'Searching content',
@@ -496,13 +442,11 @@ export class DiscordMessageSender {
       fmetrics: 'Checking metrics',
       read_file: 'Reading',
       read: 'Reading',
-      // OpenAI dangerous tools
       shell: 'Running command',
       exec: 'Executing',
       write: 'Writing file',
       edit: 'Editing file',
       apply_patch: 'Patching',
-      // MCP memory tools (ShieldCortex)
       remember: 'Remembering',
       recall: 'Recalling',
       forget: 'Forgetting',
@@ -526,7 +470,6 @@ export class DiscordMessageSender {
       quarantine_review: 'Reviewing quarantine',
       defence_stats: 'Checking defences',
       scan_memories: 'Scanning memories',
-      // MCP Playwright tools
       browser_navigate: 'Navigating',
       browser_snapshot: 'Taking snapshot',
       browser_click: 'Clicking',
@@ -543,28 +486,16 @@ export class DiscordMessageSender {
     return actions[toolName] || toolName;
   }
 
-  /**
-   * Finish streaming: render final response as embed(s).
-   *
-   * Strategy:
-   * - Short/medium responses (<=4096 chars): single embed
-   * - Long responses (<=~16k chars): multiple embeds (up to 10)
-   * - Very long responses (>~16k chars): .md file attachment + summary embed
-   */
   async finishStreaming(channelId: string, finalContent: string): Promise<void> {
     const state = this.streamStates.get(channelId);
     if (!state) return;
 
-    // Mark finished FIRST — blocks any further flushUpdate edits from starting
     state.finished = true;
-
-    // Remove from map to prevent new debounced flushUpdate callbacks
     this.streamStates.delete(channelId);
 
     this.stopSpinner(state);
     state.currentOperation = null;
 
-    // Wait for any in-flight flushUpdate edit to complete before sending final content
     await state.editLock;
 
     const client = getDiscordClient();
@@ -572,23 +503,16 @@ export class DiscordMessageSender {
       client.user.setActivity('Ready', { type: ActivityType.Custom });
     }
 
-    // Inject real ESC bytes into ```ansi code blocks
     const processed = injectAnsiEscapes(finalContent);
 
     try {
-      if (processed.length > FILE_FALLBACK_THRESHOLD) {
-        // Very long response — send as .md file with a summary embed
-        await this.sendAsFile(state, processed);
-      } else if (processed.length <= PLAIN_TEXT_THRESHOLD) {
-        // Short response — plain markdown message (feels like normal chat)
+      if (processed.length <= PLAIN_TEXT_THRESHOLD) {
         await this.sendAsPlainText(state, processed);
       } else {
-        // Medium/long response — send as embed(s)
-        await this.sendAsEmbeds(state, processed);
+        await this.sendAsPlainTextChunked(state, processed);
       }
     } catch (error) {
       console.error('[Discord] Error finishing stream:', error);
-      // Fallback: try plain text chunks
       try {
         const fallbackParts = splitDiscordMessage(finalContent, discordConfig.DISCORD_MAX_MESSAGE_LENGTH);
         if (state.interaction) {
@@ -598,7 +522,6 @@ export class DiscordMessageSender {
           }
         } else if (state.message) {
           await state.message.edit(fallbackParts[0] || 'Done.');
-          // Send remaining chunks as follow-up messages in the channel
           const chan = state.message.channel;
           if ('send' in chan) {
             for (let i = 1; i < fallbackParts.length; i++) {
@@ -620,9 +543,28 @@ export class DiscordMessageSender {
     }
   }
 
+  private async sendAsPlainTextChunked(state: DiscordStreamState, content: string): Promise<void> {
+    const parts = splitDiscordMessage(content, discordConfig.DISCORD_MAX_MESSAGE_LENGTH);
+    const first = parts[0] || 'Done.';
+    if (state.interaction) {
+      await state.interaction.editReply({ content: first, embeds: [] });
+      for (let i = 1; i < parts.length; i++) {
+        await state.interaction.followUp({ content: parts[i] });
+      }
+    } else if (state.message) {
+      await state.message.edit({ content: first, embeds: [] });
+      const chan = state.message.channel;
+      if ('send' in chan) {
+        for (let i = 1; i < parts.length; i++) {
+          await chan.send({ content: parts[i] });
+        }
+      }
+    }
+  }
+
+  // NOTE: These are retained for compatibility but are no longer preferred in finishStreaming.
   private async sendAsEmbeds(state: DiscordStreamState, content: string): Promise<void> {
     const embeds = buildResponseEmbeds(content);
-    // Batch by Discord's 6000-char total embed limit (not just count)
     const batches = batchEmbedsByCharLimit(embeds);
 
     if (state.interaction) {
@@ -645,7 +587,6 @@ export class DiscordMessageSender {
     const fileBuffer = Buffer.from(content, 'utf-8');
     const attachment = new AttachmentBuilder(fileBuffer, { name: 'response.md' });
 
-    // Create a summary embed
     const previewLength = 300;
     const preview = content.length > previewLength
       ? content.substring(0, previewLength).replace(/[`]/g, '') + '...'
@@ -664,8 +605,6 @@ export class DiscordMessageSender {
       });
     } else if (state.message) {
       await state.message.edit({ content: '', embeds: [summaryEmbed] });
-
-      // Send file as a follow-up (can't edit to add files on regular messages)
       const chan = state.message.channel;
       if ('send' in chan) {
         await chan.send({ files: [attachment] });
@@ -673,9 +612,6 @@ export class DiscordMessageSender {
     }
   }
 
-  /**
-   * Cancel streaming: update message to show cancellation.
-   */
   async cancelStreaming(channelId: string): Promise<void> {
     const state = this.streamStates.get(channelId);
     if (!state) return;
@@ -685,7 +621,6 @@ export class DiscordMessageSender {
 
     this.stopSpinner(state);
 
-    // Wait for any in-flight edit to complete
     await state.editLock;
 
     const client = getDiscordClient();
@@ -694,13 +629,49 @@ export class DiscordMessageSender {
     }
 
     try {
+      const cancelled = new EmbedBuilder()
+        .setColor(0xED4245)
+        .setDescription('Request cancelled.');
+
       if (state.interaction) {
-        await state.interaction.editReply('Request cancelled.');
+        await state.interaction.editReply({ embeds: [cancelled], content: '' });
       } else if (state.message) {
-        await state.message.edit('Request cancelled.');
+        await state.message.edit({ embeds: [cancelled], content: '' });
       }
-    } catch (error) {
-      console.error('[Discord] Error cancelling stream:', error);
+    } catch {
+      // ignore
+    }
+  }
+
+  async sendTyping(channelId: string): Promise<void> {
+    const client = getDiscordClient();
+    if (!client) return;
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (channel && 'sendTyping' in channel) {
+      await (channel as any).sendTyping();
+    }
+  }
+
+  async sendStatusLine(channelId: string, status: string): Promise<void> {
+    const content = status;
+    const client = getDiscordClient();
+    if (!client) return;
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (channel && 'send' in channel) {
+      await (channel as any).send({ content });
+    }
+  }
+
+  async sendToolList(channelId: string): Promise<void> {
+    const tools = Object.entries(TOOL_ICONS)
+      .map(([name, icon]) => `${icon} ${name}`)
+      .join('\n');
+
+    const client = getDiscordClient();
+    if (!client) return;
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (channel && 'send' in channel) {
+      await (channel as any).send({ content: `Available tools:\n${tools}` });
     }
   }
 }

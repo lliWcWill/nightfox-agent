@@ -22,6 +22,8 @@ interface MCPServerDef {
   name: string;
   command: string;
   args: string[];
+  /** Extra env vars passed to the child process. */
+  env?: Record<string, string>;
   /** If set, only connect when this env var / config is truthy. */
   enabled: boolean;
 }
@@ -52,10 +54,17 @@ function getServerDefinitions(): MCPServerDef[] {
   const servers: MCPServerDef[] = [];
 
   // ShieldCortex (memory) — always enabled
+  // Pass CLAUDE_MEMORY_PROJECT so the subprocess uses the same project scope
+  // as Claude Code (which auto-detects from its own CWD, typically the home dir).
+  const memoryEnv: Record<string, string> = {};
+  if (config.MCP_MEMORY_PROJECT) {
+    memoryEnv.CLAUDE_MEMORY_PROJECT = config.MCP_MEMORY_PROJECT;
+  }
   servers.push({
     name: 'shieldcortex',
     command: config.MCP_MEMORY_COMMAND || 'node',
     args: parseArgs(config.MCP_MEMORY_ARGS, ['/home/player3vsgpt/ShieldCortex/dist/index.js', 'start']),
+    env: Object.keys(memoryEnv).length > 0 ? memoryEnv : undefined,
     enabled: true,
   });
 
@@ -110,13 +119,17 @@ class MCPManager {
       for (const def of defs) {
         if (!def.enabled) continue;
 
-        console.log(`[MCP] Connecting to ${def.name}: ${def.command} ${def.args.join(' ')}`);
+        const envInfo = def.env ? ` env=${JSON.stringify(def.env)}` : '';
+        console.log(`[MCP] Connecting to ${def.name}: ${def.command} ${def.args.join(' ')}${envInfo}`);
         try {
           const server = new MCPServerStdio({
             command: def.command,
             args: def.args,
             name: def.name,
             cacheToolsList: true,
+            ...(def.env ? { env: Object.fromEntries(
+              Object.entries({ ...process.env, ...def.env }).filter((kv): kv is [string, string] => kv[1] != null),
+            ) } : {}),
           });
 
           await server.connect();

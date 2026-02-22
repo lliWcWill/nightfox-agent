@@ -67,6 +67,64 @@ function safeFileName(title: string): string {
 }
 
 /**
+ * Persist transcript to the active project's .claudegram/extract folder.
+ * Returns both abs + rel path (rel is what the agent should see).
+ */
+async function persistTranscriptArtifact(
+  chatId: number,
+  result: ExtractResult,
+): Promise<{ relPath: string; absPath: string } | null> {
+  try {
+    const session = sessionManager.getSession(chatId);
+    if (!session) return null;
+    if (!result.transcript || !result.transcript.trim()) return null;
+
+    const baseDir = session.workingDirectory;
+    const dir = path.join(baseDir, '.claudegram', 'extract');
+    await fs.promises.mkdir(dir, { recursive: true });
+
+    const slug = safeFileName(result.title || 'extract');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `transcript_${slug}_${stamp}.txt`;
+    const absPath = path.join(dir, filename);
+    await fs.promises.writeFile(absPath, result.transcript, 'utf-8');
+
+    const relPath = `.claudegram/extract/${filename}`;
+    return { relPath, absPath };
+  } catch (err) {
+    console.warn('[extract] Failed to persist transcript artifact:', err);
+    return null;
+  }
+}
+
+function buildExtractContextMessage(params: {
+  modeLabel: string;
+  url: string;
+  title: string;
+  platform: string;
+  transcriptRelPath?: string;
+  transcriptChars?: number;
+  durationStr?: string;
+}): string {
+  const { modeLabel, url, title, platform, transcriptRelPath, transcriptChars, durationStr } = params;
+
+  return (
+    `[Extract Context — ${modeLabel}]\n` +
+    `URL: ${url}\n` +
+    `Title: ${title}\n` +
+    `Platform: ${platform}\n` +
+    (durationStr ? `Duration: ${durationStr}\n` : '') +
+    (transcriptRelPath
+      ? `Transcript saved to: ${transcriptRelPath} (${(transcriptChars ?? 0).toLocaleString()} chars)\n`
+      : 'Transcript: (not available)\n') +
+    `\nInstructions:\n` +
+    `- Do NOT ask me to paste the transcript into chat.\n` +
+    `- If you need the transcript, use the read_file tool to read the saved transcript file in chunks.\n` +
+    `- Start by acknowledging the extract and asking what the user wants to do (summary, key claims, outline, timestamps, etc.).`
+  );
+}
+
+/**
  * Compresses a video to fit within a target size and writes the result to the specified output directory.
  *
  * @param inputPath - Path to the source video file.
@@ -413,19 +471,6 @@ async function promptProjectPicker(
   });
 }
 
-/**
- * Run the full All + Chat extraction workflow: extract media, post results to a thread, and stream an AI assistant response.
- *
- * Performs extraction for the provided URL in "all + chat" mode, creates a thread in the invoking channel, posts extracted media (video, audio, transcript, subtitles) into that thread, and streams a conversational AI (Claude) response driven by the transcript into the thread.
- *
- * @param interaction - The originating chat input interaction to update and follow up in
- * @param url - The source URL to extract from
- * @param emoji - Platform emoji used in embeds and thread headers
- * @param label - Human-readable platform label used in footers and metadata
- * @param displayUrl - A display-friendly form of the URL used in embeds
- * @param maxVideoMB - Maximum allowed video file size in megabytes for uploads; used to decide compression or warnings
- * @param chatId - Identifier for the user's chat session used when queueing and routing the assistant request
- */
 async function runAllChatExtraction(
   interaction: ChatInputCommandInteraction,
   url: string,
@@ -438,7 +483,7 @@ async function runAllChatExtraction(
   const modeLabel = 'All + Chat';
 
   const progressEmbed = new EmbedBuilder()
-    .setTitle(`${emoji} Extract \u2014 ${modeLabel}`)
+    .setTitle(`${emoji} Extract — ${modeLabel}`)
     .setDescription(`\`${displayUrl}\`\n\n\u{23F3} Extracting...`)
     .setColor(0x5865F2);
 
@@ -453,7 +498,7 @@ async function runAllChatExtraction(
       onProgress: async (msg) => {
         try {
           const updatedEmbed = new EmbedBuilder()
-            .setTitle(`${emoji} Extract \u2014 ${modeLabel}`)
+            .setTitle(`${emoji} Extract — ${modeLabel}`)
             .setDescription(`\`${displayUrl}\`\n\n${msg}`)
             .setColor(0x5865F2);
           await interaction.editReply({ embeds: [updatedEmbed], components: disabledRows() });
@@ -466,7 +511,7 @@ async function runAllChatExtraction(
       .setTitle(`${emoji} ${result.title}`)
       .setDescription(`\`${displayUrl}\``)
       .setColor(0x57F287)
-      .setFooter({ text: `${label} \u2014 ${modeLabel}` });
+      .setFooter({ text: `${label} — ${modeLabel}` });
 
     if (result.warnings.length > 0) {
       doneEmbed.addFields({ name: 'Warnings', value: result.warnings.join('\n').slice(0, 1024) });
@@ -510,14 +555,18 @@ async function runAllChatExtraction(
     // Post all media inside the thread
     await sendMediaFiles(result, 'all_chat', thread, null, maxVideoMB);
 
-    // Stream Claude response in the thread
-    const contextMessage =
-      `[Extract Context \u2014 All + Chat]\n` +
-      `URL: ${url}\n` +
-      `Title: ${result.title}\n` +
-      `Platform: ${label}\n\n` +
-      `--- TRANSCRIPT ---\n${result.transcript || '(No transcript available)'}\n--- END ---\n\n` +
-      `The user extracted this content and wants to discuss it. Acknowledge what you received and ask what they'd like to discuss.`;
+    // Persist transcript to project workspace as an artifact (so we don't inject it into context)
+    const artifact = await persistTranscriptArtifact(chatId, result);
+
+    const contextMessage = buildExtractContextMessage({
+      modeLabel: 'All + Chat',
+      url,
+      title: result.title,
+      platform: label,
+      transcriptRelPath: artifact?.relPath,
+      transcriptChars: result.transcript?.length,
+      durationStr,
+    });
 
     const threadChannelId = thread.id;
     const thinkingEmbed = new EmbedBuilder().setColor(0x5865F2).setDescription('**\u{25CF}\u{25CB}\u{25CB}** Processing');
@@ -567,14 +616,6 @@ async function runAllChatExtraction(
   }
 }
 
-/**
- * Handle the /extract slash command flow for extracting media and transcripts from a provided URL.
- *
- * Presents an interactive mode picker (Text, Audio, Video, All, All + Chat), validates the URL,
- * coordinates project selection for the All + Chat mode when required, streams extraction progress
- * to the user, posts extracted media and transcripts to the channel (or thread), and surfaces
- * errors or warnings to the user. Cleans up temporary extraction artifacts on completion.
- */
 export async function handleExtract(interaction: ChatInputCommandInteraction): Promise<void> {
   const url = interaction.options.getString('url', true);
 
@@ -595,7 +636,7 @@ export async function handleExtract(interaction: ChatInputCommandInteraction): P
   const maxVideoMB = discordConfig.DISCORD_VIDEO_MAX_SIZE_MB;
 
   const embed = new EmbedBuilder()
-    .setTitle(`${emoji} Extract \u2014 ${label}`)
+    .setTitle(`${emoji} Extract — ${label}`)
     .setDescription(`\`${displayUrl}\`\n\nWhat do you want to extract?`)
     .setColor(0x5865F2)
     .setFooter({ text: 'Select a mode below' });
@@ -643,7 +684,7 @@ export async function handleExtract(interaction: ChatInputCommandInteraction): P
         // Disable buttons while they pick a project
         const [dr1, dr2] = disabledRows();
         const waitEmbed = new EmbedBuilder()
-          .setTitle(`${emoji} Extract \u2014 All + Chat`)
+          .setTitle(`${emoji} Extract — All + Chat`)
           .setDescription(`\`${displayUrl}\`\n\n\u{1F4C1} Pick a project directory to continue.`)
           .setColor(0xFEE75C);
 
@@ -655,7 +696,7 @@ export async function handleExtract(interaction: ChatInputCommandInteraction): P
         if (!chosenDir) {
           // Timed out or cancelled — reset embed
           const cancelEmbed = new EmbedBuilder()
-            .setTitle(`${emoji} Extract \u2014 Cancelled`)
+            .setTitle(`${emoji} Extract — Cancelled`)
             .setDescription(`\`${displayUrl}\`\n\nNo project selected. Use \`/project\` to set one, then try again.`)
             .setColor(0xFF0000);
           try {
@@ -672,7 +713,7 @@ export async function handleExtract(interaction: ChatInputCommandInteraction): P
       // Project already set — proceed directly
       const [dr1, dr2] = disabledRows();
       const progressEmbed = new EmbedBuilder()
-        .setTitle(`${emoji} Extract \u2014 All + Chat`)
+        .setTitle(`${emoji} Extract — All + Chat`)
         .setDescription(`\`${displayUrl}\`\n\n\u{23F3} Extracting...`)
         .setColor(0x5865F2);
 
@@ -686,7 +727,7 @@ export async function handleExtract(interaction: ChatInputCommandInteraction): P
     const [disabledRow1, disabledRow2] = disabledRows();
 
     const progressEmbed = new EmbedBuilder()
-      .setTitle(`${emoji} Extract \u2014 ${modeLabel}`)
+      .setTitle(`${emoji} Extract — ${modeLabel}`)
       .setDescription(`\`${displayUrl}\`\n\n\u{23F3} Extracting...`)
       .setColor(0x5865F2);
 
@@ -701,7 +742,7 @@ export async function handleExtract(interaction: ChatInputCommandInteraction): P
         onProgress: async (msg) => {
           try {
             const updatedEmbed = new EmbedBuilder()
-              .setTitle(`${emoji} Extract \u2014 ${modeLabel}`)
+              .setTitle(`${emoji} Extract — ${modeLabel}`)
               .setDescription(`\`${displayUrl}\`\n\n${msg}`)
               .setColor(0x5865F2);
             await interaction.editReply({ embeds: [updatedEmbed], components: disabledRows() });
@@ -714,7 +755,7 @@ export async function handleExtract(interaction: ChatInputCommandInteraction): P
         .setTitle(`${emoji} ${result.title}`)
         .setDescription(`\`${displayUrl}\``)
         .setColor(0x57F287)
-        .setFooter({ text: `${label} \u2014 ${modeLabel}` });
+        .setFooter({ text: `${label} — ${modeLabel}` });
 
       if (result.warnings.length > 0) {
         doneEmbed.addFields({ name: 'Warnings', value: result.warnings.join('\n').slice(0, 1024) });
@@ -724,6 +765,77 @@ export async function handleExtract(interaction: ChatInputCommandInteraction): P
 
       // Post media to channel
       await sendMediaFiles(result, mode, null, interaction, maxVideoMB);
+
+      // Mirror Reddit behavior: if the user has an active project session, allow "Chat" follow-up
+      // by persisting transcript as an artifact and starting an AI thread.
+      const chatId = discordChatId(interaction.user.id);
+      const session = sessionManager.getSession(chatId);
+      if (session && (mode === 'all' || mode === 'text')) {
+        // Create a minimal "Chat" option UI
+        const chatBtn = new ButtonBuilder()
+          .setCustomId('extract-chat')
+          .setLabel('Chat')
+          .setStyle(ButtonStyle.Success);
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(chatBtn);
+
+        const msg = await interaction.followUp({
+          content: 'Want to chat about this extract?',
+          components: [row],
+        });
+
+        const c = msg.createMessageComponentCollector({ time: COLLECTOR_TIMEOUT_MS });
+        let did = false;
+        c.on('collect', async (ci) => {
+          if (ci.user.id !== interaction.user.id) {
+            await ci.reply({ content: 'Only the command author can use this button.', ephemeral: true });
+            return;
+          }
+          if (did) return;
+          did = true;
+          c.stop('handled');
+
+          // disable
+          const disabled = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId('extract-chat').setLabel('Chat').setStyle(ButtonStyle.Success).setDisabled(true),
+          );
+          await ci.update({ components: [disabled] });
+
+          const artifact = await persistTranscriptArtifact(chatId, result!);
+
+          const thread = await (interaction.channel as TextChannel).threads.create({
+            name: `\u{1F4AC} ${(result!.title || 'Extract').slice(0, 90)}`.slice(0, 100),
+            autoArchiveDuration: 1440,
+          });
+
+          await interaction.followUp(`Thread created: ${thread.toString()}`);
+
+          const contextMessage = buildExtractContextMessage({
+            modeLabel: 'Chat',
+            url,
+            title: result!.title,
+            platform: label,
+            transcriptRelPath: artifact?.relPath,
+            transcriptChars: result!.transcript?.length,
+          });
+
+          const thinkingEmbed = new EmbedBuilder().setColor(0x5865F2).setDescription('**\u{25CF}\u{25CB}\u{25CB}** Processing');
+          const thinkingMsg = await thread.send({ embeds: [thinkingEmbed] });
+          await discordMessageSender.startStreamingFromExistingMessage(thinkingMsg, thread.id);
+
+          await queueRequest(chatId, contextMessage, async () => {
+            const abortController = new AbortController();
+            setAbortController(chatId, abortController);
+            const agentResponse = await sendToAgent(chatId, contextMessage, {
+              onProgress: (text) => discordMessageSender.updateStream(thread.id, text),
+              onToolStart: (toolName, input) => discordMessageSender.updateToolOperation(thread.id, toolName, input),
+              onToolEnd: () => discordMessageSender.clearToolOperation(thread.id),
+              abortController,
+              platform: 'discord',
+            });
+            await discordMessageSender.finishStreaming(thread.id, agentResponse.text);
+          });
+        });
+      }
 
     } catch (err) {
       const errorEmbed = new EmbedBuilder()

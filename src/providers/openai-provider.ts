@@ -181,6 +181,7 @@ export class OpenAIProvider implements AgentProvider {
       platform,
       dangerousToolsEnabled,
       mcpServers,
+      session.conversationId,
     );
 
     const agentStartTime = Date.now();
@@ -217,8 +218,22 @@ export class OpenAIProvider implements AgentProvider {
         stream: true,
         signal: controller.signal,
         // Avoid "Max turns (10) exceeded" from @openai/agents runner.
-        // Set very high; can be overridden via env.
-        maxTurns: Number.parseInt(process.env.CLAUDEGRAM_MAX_TURNS || '0', 10) || 1000000,
+        // We treat turns as unlimited by default.
+        //
+        // Note: the Agents SDK expects a finite number. If you truly want
+        // "no limit", the practical approach is to set an extremely high cap.
+        //
+        // Env overrides:
+        //   - CLAUDEGRAM_MAX_TURNS=unlimited|infinite|none|0  -> huge cap
+        //   - CLAUDEGRAM_MAX_TURNS=<number>                   -> that cap
+        maxTurns: (() => {
+          const raw = (process.env.CLAUDEGRAM_MAX_TURNS ?? '').trim().toLowerCase();
+          if (!raw || raw === '0' || raw === 'none' || raw === 'infinite' || raw === 'unlimited') {
+            return Number.MAX_SAFE_INTEGER;
+          }
+          const parsed = Number.parseInt(raw, 10);
+          return Number.isFinite(parsed) && parsed > 0 ? parsed : Number.MAX_SAFE_INTEGER;
+        })(),
       } as Parameters<typeof run>[2]);
 
       // The stream: true overload returns StreamedRunResult
@@ -266,6 +281,9 @@ export class OpenAIProvider implements AgentProvider {
 
       // Trim history to avoid exceeding context window
       this.trimHistory(agentState.history, contextWindow);
+
+      // Persist OpenAI history so /continue and /resume restore context after restart
+      this.agentCache.saveHistory(chatId, session.conversationId, agentState.history);
 
       // Extract usage from the run
       const usage = streamed.state.usage;
@@ -513,6 +531,12 @@ export class OpenAIProvider implements AgentProvider {
   }
 
   async clearConversation(chatId: number): Promise<void> {
+    // Clear in-memory cache and also remove persisted history for the active session
+    const session = sessionManager.getSession(chatId);
+    if (session?.conversationId) {
+      this.agentCache.deletePersistedHistory(chatId, session.conversationId);
+    }
+
     this.agentCache.delete(chatId);
     this.chatUsageCache.delete(chatId);
     this.toolCallbackRefs.delete(chatId);

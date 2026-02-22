@@ -2,12 +2,11 @@ import { ChatInputCommandInteraction } from 'discord.js';
 import * as path from 'path';
 import { discordChatId } from '../id-mapper.js';
 import { sessionManager } from '../../claude/session-manager.js';
-import { clearConversation } from '../../claude/agent.js';
 
 /**
  * Continues the invoking user's most recent session and notifies them of the resumed project.
  *
- * If a previous session exists, clears the conversation context for the chat and replies ephemerally
+ * If a previous session exists, resumes it and replies ephemerally
  * with the project name, working directory, and a truncated Claude session ID when available.
  * If no previous session exists, replies ephemerally with guidance to start a new session using `/project <path>`.
  *
@@ -27,7 +26,9 @@ export async function handleContinue(interaction: ChatInputCommandInteraction): 
       return;
     }
 
-    clearConversation(chatId);
+    // IMPORTANT: Do NOT clear conversation on /continue.
+    // /continue is meant to restore the user's previous conversation context
+    // after a bot restart or interruption.
 
     const projectName = path.basename(session.workingDirectory);
     let msg = `Continuing **${projectName}**\n\nWorking directory: \`${session.workingDirectory}\``;
