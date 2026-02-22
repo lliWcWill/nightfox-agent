@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { access } from 'node:fs/promises';
+import { constants as FS } from 'node:fs';
 import type { JobRecord } from '../job-manager.js';
 
 export type CodeRabbitPayload = {
@@ -38,10 +40,34 @@ function run(cmd: string, args: string[], cwd: string, onCancel: (fn: () => void
   });
 }
 
+async function resolveCodeRabbitBinary(): Promise<string> {
+  const home = process.env.HOME;
+  const candidates = [
+    home ? `${home}/.local/bin/coderabbit` : null,
+    'coderabbit',
+  ].filter(Boolean) as string[];
+
+  for (const c of candidates) {
+    if (c.includes('/')) {
+      try {
+        await access(c, FS.X_OK);
+        return c;
+      } catch {
+        // continue
+      }
+    } else {
+      // rely on PATH
+      return c;
+    }
+  }
+
+  throw new Error('CodeRabbit binary not found. Expected ~/.local/bin/coderabbit or coderabbit in PATH.');
+}
+
 export async function coderabbitReview(job: JobRecord<CodeRabbitPayload, CodeRabbitResult>) {
   const { repoPath, baseRef, target, promptOnly } = job.payload;
 
-  const cmd = `${process.env.HOME}/.local/bin/coderabbit`;
+  const cmd = await resolveCodeRabbitBinary();
   const args = ['review'];
   if (promptOnly) args.push('--prompt-only');
   args.push('-t', target);

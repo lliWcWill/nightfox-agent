@@ -2,53 +2,85 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  type ButtonInteraction,
   type ChatInputCommandInteraction,
 } from 'discord.js';
 
-import { JobManager } from '../../jobs/job-manager.js';
+import { jobManager } from '../../jobs/index.js';
 import {
   coderabbitReview,
   type CodeRabbitPayload,
 } from '../../jobs/workers/coderabbit-review.js';
 import { splitDiscordMessage } from '../markdown.js';
 
-const jobManager = new JobManager(1);
-
-function repoPathFromCwd() {
-  return process.cwd();
+function repoPathFromEnvOrCwd() {
+  return process.env.CLAUDEGRAM_REPO_PATH || process.cwd();
 }
 
 export async function creviewCommand(interaction: ChatInputCommandInteraction) {
   const baseRef = interaction.options.getString('base') ?? 'origin/main';
-  const target = (interaction.options.getString('target') as 'committed' | 'uncommitted') ?? 'committed';
+  const type = (interaction.options.getString('type') as 'committed' | 'uncommitted' | 'all' | null) ?? 'committed';
+  const targets: Array<'committed' | 'uncommitted'> = type === 'all' ? ['committed', 'uncommitted'] : [type];
+  const repoPath = repoPathFromEnvOrCwd();
 
-  const payload: CodeRabbitPayload = {
-    repoPath: repoPathFromCwd(),
-    baseRef,
-    target,
-    promptOnly: true,
-  };
+  const jobs = targets.map((target) => {
+    const payload: CodeRabbitPayload = {
+      repoPath,
+      baseRef,
+      target,
+      promptOnly: true,
+    };
+    return jobManager.create('coderabbit-review', payload, coderabbitReview);
+  });
 
-  const job = jobManager.create('coderabbit-review', payload, coderabbitReview);
+  const firstJob = jobs[0];
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId(`creview:cancel:${job.id}`)
+      .setCustomId(`creview:cancel:${firstJob.id}`)
       .setLabel('Cancel')
       .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
-      .setCustomId(`creview:show:${job.id}`)
+      .setCustomId(`creview:show:${firstJob.id}`)
       .setLabel('Show output')
       .setStyle(ButtonStyle.Primary),
   );
 
+  const extra = jobs.length > 1
+    ? ` (queued ${jobs.length} jobs: ${jobs.map(j => `\`${j.id}\``).join(', ')})`
+    : '';
+
   await interaction.reply({
-    content: `Started CodeRabbit review (job \`${job.id}\`) vs \`${baseRef}\` (target: \`${target}\`).`,
+    content: `Started CodeRabbit review (job \`${firstJob.id}\`) vs \`${baseRef}\` (type: \`${type}\`, repo: \`${repoPath}\`).${extra}`,
     components: [row],
   });
+
+  // Best-effort completion notification for the first job (keeps noise down).
+  const interval = setInterval(async () => {
+    const j = jobManager.get(firstJob.id);
+    if (!j) return;
+    if (j.state === 'queued' || j.state === 'running') return;
+    clearInterval(interval);
+
+    const ms = (j.finishedAt ?? Date.now()) - (j.startedAt ?? j.createdAt);
+    const secs = (ms / 1000).toFixed(1);
+    const status = j.state === 'succeeded'
+      ? '✅ Done'
+      : j.state === 'cancelled'
+        ? '🛑 Cancelled'
+        : '❌ Failed';
+
+    try {
+      await interaction.editReply({
+        content: `${status} — job \`${firstJob.id}\` (${secs}s).\nStarted CodeRabbit review vs \`${baseRef}\` (type: \`${type}\`, repo: \`${repoPath}\`).${extra}`,
+      });
+    } catch {
+      // ignore
+    }
+  }, 1500);
 }
 
-export async function creviewButton(interaction: any) {
+export async function creviewButton(interaction: ButtonInteraction) {
   const [prefix, action, jobId] = String(interaction.customId).split(':');
   if (prefix !== 'creview' || !action || !jobId) return;
 
