@@ -14,6 +14,12 @@ set -euo pipefail
 LOG_FILE="${1:?Usage: rotate-logs.sh <logfile> [max_rotated]}"
 MAX_ROTATED="${2:-10}"
 
+# Validate max rotated is a positive integer
+if ! [[ "$MAX_ROTATED" =~ ^[0-9]+$ ]] || [[ "$MAX_ROTATED" -lt 1 ]]; then
+  echo "[rotate-logs] invalid max_rotated: $MAX_ROTATED (must be >= 1)" >&2
+  exit 2
+fi
+
 # Nothing to rotate if the log doesn't exist or is empty
 [[ -s "$LOG_FILE" ]] || exit 0
 
