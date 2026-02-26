@@ -721,6 +721,126 @@ function createDelegateDeepTaskTool() {
   });
 }
 
+function createDelegateCodeRabbitReviewTool(cwd: string) {
+  return tool({
+    name: 'delegate_coderabbit_review',
+    description:
+      'Queue a CodeRabbit review job with prompt-only mode enabled. Returns immediately with job id(s).',
+    parameters: z.object({
+      base_ref: z.string().nullable().optional().describe('Base ref to diff against (default: origin/main)'),
+      target: z
+        .enum(['committed', 'uncommitted', 'all'])
+        .nullable()
+        .optional()
+        .describe('What to review (default: committed)'),
+      repo_path: z.string().nullable().optional().describe('Optional repo path override (default: current cwd)'),
+    }),
+    execute: async ({ base_ref, target, repo_path }) => {
+      try {
+        const { coderabbitReview } = await import('../jobs/workers/coderabbit-review.js');
+        const baseRef = (base_ref ?? 'origin/main').trim() || 'origin/main';
+        const selectedTarget = target ?? 'committed';
+        const repoPath = (repo_path ?? cwd).trim() || cwd;
+        const targets: Array<'committed' | 'uncommitted'> =
+          selectedTarget === 'all' ? ['committed', 'uncommitted'] : [selectedTarget];
+
+        const jobIds = targets.map((t) =>
+          jobRunner.enqueue({
+            name: 'coderabbit-review',
+            origin: {
+              channelId: 'agent:tool',
+              userId: 'agent:tool',
+            },
+            handler: async (ctx) =>
+              coderabbitReview({
+                id: ctx.jobId,
+                payload: {
+                  repoPath,
+                  baseRef,
+                  target: t,
+                  promptOnly: true,
+                },
+                state: 'running',
+                createdAt: Date.now(),
+              } as any),
+            timeoutMs: 1000 * 60 * 20,
+          }),
+        );
+
+        return JSON.stringify({
+          status: 'queued',
+          mode: 'prompt-only',
+          baseRef,
+          target: selectedTarget,
+          repoPath,
+          jobIds,
+        });
+      } catch (err) {
+        return `[error] delegate_coderabbit_review failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    },
+  });
+}
+
+function createDelegateCodexHighReviewTool() {
+  return tool({
+    name: 'delegate_codex_high_review',
+    description:
+      'Queue a Codex extra-high (gpt-5.3-codex-high) deep review loop for feature/code review tasks.',
+    parameters: z.object({
+      task: z.string().describe('What should be reviewed or validated'),
+      max_iterations: z.number().nullable().optional().describe('Optional max loop iterations (default 24)'),
+    }),
+    execute: async ({ task, max_iterations }) => {
+      try {
+        const chatId = getCurrentToolChatId();
+        if (typeof chatId !== 'number') {
+          return '[error] delegate_codex_high_review unavailable: missing chat context';
+        }
+        const trimmed = task.trim();
+        if (!trimmed) {
+          return '[error] delegate_codex_high_review requires non-empty task';
+        }
+
+        const reviewTask = [
+          'Perform an extra-high strict code/plan review.',
+          'Output: critical issues first, then risks, then exact fixes.',
+          `Task: ${trimmed}`,
+        ].join('\n');
+
+        const handler = agentDeepLoopJob({
+          chatId,
+          task: reviewTask,
+          model: 'gpt-5.3-codex-high',
+          maxIterations:
+            typeof max_iterations === 'number'
+              ? Math.max(1, Math.min(64, Math.floor(max_iterations)))
+              : undefined,
+        });
+
+        const jobId = jobRunner.enqueue({
+          name: 'agent:codex-high-review',
+          origin: {
+            channelId: `chat:${chatId}`,
+            userId: `chat:${chatId}`,
+          },
+          handler,
+          timeoutMs: 1000 * 60 * 30,
+        });
+
+        return JSON.stringify({
+          status: 'queued',
+          jobId,
+          model: 'gpt-5.3-codex-high',
+          chatId,
+        });
+      } catch (err) {
+        return `[error] delegate_codex_high_review failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------
 //  fsuite tool definitions
 // ---------------------------------------------------------------------------
@@ -844,6 +964,8 @@ export function createFsuiteTools(cwd: string, dangerousMode: boolean): Tool[] {
     createReadFileTool(cwd),
     createReadTool(cwd),
     createDelegateDeepTaskTool(),
+    createDelegateCodeRabbitReviewTool(cwd),
+    createDelegateCodexHighReviewTool(),
   ];
 
   if (dangerousMode) {
