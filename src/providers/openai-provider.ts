@@ -20,6 +20,7 @@ import { AgentCache } from './openai-agent-cache.js';
 import type { HistoryItem } from './openai-agent-cache.js';
 import { hasOAuthTokens, getAuthenticatedClient } from './openai-auth.js';
 import { mcpManager } from './openai-mcp.js';
+import { runWithToolContext } from './openai-tool-context.js';
 
 import type {
   AgentProvider,
@@ -219,27 +220,29 @@ export class OpenAIProvider implements AgentProvider {
 
       // Run with streaming — no session, local history only
       console.log(`[OpenAI] Starting run() with ${input.length} input items`);
-      const result = await run(agentState.agent, input, {
-        stream: true,
-        signal: controller.signal,
-        // Avoid "Max turns (10) exceeded" from @openai/agents runner.
-        // We treat turns as unlimited by default.
-        //
-        // Note: the Agents SDK expects a finite number. If you truly want
-        // "no limit", the practical approach is to set an extremely high cap.
-        //
-        // Env overrides:
-        //   - CLAUDEGRAM_MAX_TURNS=unlimited|infinite|none|0  -> huge cap
-        //   - CLAUDEGRAM_MAX_TURNS=<number>                   -> that cap
-        maxTurns: (() => {
-          const raw = (process.env.CLAUDEGRAM_MAX_TURNS ?? '').trim().toLowerCase();
-          if (!raw || raw === '0' || raw === 'none' || raw === 'infinite' || raw === 'unlimited') {
-            return Number.MAX_SAFE_INTEGER;
-          }
-          const parsed = Number.parseInt(raw, 10);
-          return Number.isFinite(parsed) && parsed > 0 ? parsed : Number.MAX_SAFE_INTEGER;
-        })(),
-      } as Parameters<typeof run>[2]);
+      const result = await runWithToolContext({ chatId }, async () =>
+        run(agentState.agent, input, {
+          stream: true,
+          signal: controller.signal,
+          // Avoid "Max turns (10) exceeded" from @openai/agents runner.
+          // We treat turns as unlimited by default.
+          //
+          // Note: the Agents SDK expects a finite number. If you truly want
+          // "no limit", the practical approach is to set an extremely high cap.
+          //
+          // Env overrides:
+          //   - CLAUDEGRAM_MAX_TURNS=unlimited|infinite|none|0  -> huge cap
+          //   - CLAUDEGRAM_MAX_TURNS=<number>                   -> that cap
+          maxTurns: (() => {
+            const raw = (process.env.CLAUDEGRAM_MAX_TURNS ?? '').trim().toLowerCase();
+            if (!raw || raw === '0' || raw === 'none' || raw === 'infinite' || raw === 'unlimited') {
+              return Number.MAX_SAFE_INTEGER;
+            }
+            const parsed = Number.parseInt(raw, 10);
+            return Number.isFinite(parsed) && parsed > 0 ? parsed : Number.MAX_SAFE_INTEGER;
+          })(),
+        } as Parameters<typeof run>[2]),
+      );
 
       // The stream: true overload returns StreamedRunResult
       const streamed = result as AsyncIterable<RunStreamEvent> & {

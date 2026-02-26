@@ -18,6 +18,9 @@ import { tool } from '@openai/agents';
 import { z } from 'zod';
 
 import { resolveBin } from '../utils/resolve-bin.js';
+import { jobRunner } from '../jobs/index.js';
+import { agentDeepLoopJob } from '../jobs/workers/agent-deep-loop.js';
+import { getCurrentToolChatId } from './openai-tool-context.js';
 
 import type { Tool } from '@openai/agents-core';
 
@@ -664,6 +667,60 @@ function createApplyPatchFunctionTool(cwd: string) {
   });
 }
 
+function createDelegateDeepTaskTool() {
+  return tool({
+    name: 'delegate_deep_task',
+    description:
+      'Delegate a deep task to the autonomous background loop. Returns immediately with a jobId.',
+    parameters: z.object({
+      task: z.string().describe('Deep task objective to execute in the loop'),
+      model: z.string().nullable().optional().describe('Optional model override for the deep loop'),
+      max_iterations: z.number().nullable().optional().describe('Optional max loop iterations (default 24)'),
+    }),
+    execute: async ({ task, model, max_iterations }) => {
+      try {
+        const chatId = getCurrentToolChatId();
+        if (typeof chatId !== 'number') {
+          return '[error] delegate_deep_task unavailable: missing chat context';
+        }
+        const trimmed = task.trim();
+        if (!trimmed) {
+          return '[error] delegate_deep_task requires non-empty task';
+        }
+
+        const handler = agentDeepLoopJob({
+          chatId,
+          task: trimmed,
+          model: model ?? undefined,
+          maxIterations:
+            typeof max_iterations === 'number'
+              ? Math.max(1, Math.min(64, Math.floor(max_iterations)))
+              : undefined,
+        });
+
+        const jobId = jobRunner.enqueue({
+          name: 'agent:autonomous-deep-loop',
+          origin: {
+            channelId: `chat:${chatId}`,
+            userId: `chat:${chatId}`,
+          },
+          handler,
+          timeoutMs: 1000 * 60 * 30,
+        });
+
+        return JSON.stringify({
+          status: 'queued',
+          jobId,
+          chatId,
+          timeoutMinutes: 30,
+        });
+      } catch (err) {
+        return `[error] delegate_deep_task failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------
 //  fsuite tool definitions
 // ---------------------------------------------------------------------------
@@ -786,6 +843,7 @@ export function createFsuiteTools(cwd: string, dangerousMode: boolean): Tool[] {
     ...createFsuiteOnlyTools(cwd),
     createReadFileTool(cwd),
     createReadTool(cwd),
+    createDelegateDeepTaskTool(),
   ];
 
   if (dangerousMode) {

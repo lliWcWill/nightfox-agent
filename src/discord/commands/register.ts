@@ -238,7 +238,28 @@ const commands = [
           opt.setName('job')
             .setDescription('Job to run')
             .setRequired(true)
-            .addChoices({ name: 'Build + typecheck', value: 'build' })
+            .addChoices(
+              { name: 'Build + typecheck', value: 'build' },
+              { name: 'Self check (typecheck + build)', value: 'self-check' },
+              { name: 'Self update (git pull + build)', value: 'self-update' },
+              { name: 'Restart Discord service', value: 'restart-discord-service' },
+              { name: 'Full self refresh', value: 'full-self-refresh' },
+              { name: 'Agent loop 30m', value: 'agent-loop-30m' },
+            )
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('deep')
+        .setDescription('Run a 30m agent deep loop and report back')
+        .addStringOption(opt =>
+          opt.setName('task')
+            .setDescription('Deep task prompt')
+            .setRequired(true)
+        )
+        .addStringOption(opt =>
+          opt.setName('model')
+            .setDescription('Optional model override')
+            .setRequired(false)
         )
     )
     .addSubcommand(sub =>
