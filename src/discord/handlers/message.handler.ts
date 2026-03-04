@@ -29,6 +29,7 @@ import { handleVoiceMessage } from './voice.handler.js';
 import { maybeSendDiscordVoiceReply } from '../voice-reply.js';
 import { sendCompactionNotice, sendSessionInitNotice } from '../compaction-notice.js';
 import { transcribeFile } from '../../audio/transcribe.js';
+import { markConversationActivity } from '../jobs/activity-gate.js';
 import * as os from 'os';
 import { user as userItem } from '@openai/agents';
 import type { AgentInputItem } from '@openai/agents';
@@ -330,6 +331,13 @@ async function handleImageAttachment(
 export async function handleMessage(message: Message): Promise<void> {
   // Ignore bot messages
   if (message.author.bot) return;
+
+  markConversationActivity({
+    guildId: message.guildId ?? undefined,
+    channelId: message.channelId,
+    threadId: message.channel.isThread() ? message.channelId : undefined,
+    userId: message.author.id,
+  });
 
   const isMentioned = message.client.user ? message.mentions.has(message.client.user) : false;
   const isThread =

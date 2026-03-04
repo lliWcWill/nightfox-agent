@@ -28,6 +28,7 @@ import { devopsCommand, devopsButton } from '../commands/devops.js';
 import { sanitizeError } from '../../utils/sanitize.js';
 import { handleImageButtons } from './message.handler.js';
 import { approvalManager } from '../approvals/index.js';
+import { markConversationActivity } from '../jobs/activity-gate.js';
 
 /**
  * Dispatches a Discord interaction to the matching command handler after authorization and sends sanitized error feedback to the user on failure.
@@ -35,6 +36,15 @@ import { approvalManager } from '../approvals/index.js';
  * @param interaction - The incoming Discord interaction to authorize and dispatch; supports message context menu and chat input commands.
  */
 export async function handleInteraction(interaction: Interaction): Promise<void> {
+  if ('channelId' in interaction && interaction.channelId) {
+    markConversationActivity({
+      guildId: 'guildId' in interaction ? (interaction.guildId ?? undefined) : undefined,
+      channelId: interaction.channelId,
+      threadId: interaction.channel?.isThread() ? interaction.channelId : undefined,
+      userId: interaction.user?.id,
+    });
+  }
+
   // Approval modals
   if (interaction.isModalSubmit()) {
     const authorized = await checkInteractionAuth(interaction);

@@ -1,7 +1,9 @@
-import { ButtonInteraction, ChatInputCommandInteraction, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionReplyOptions, Message, TextBasedChannel } from 'discord.js';
+import { ButtonInteraction, ChatInputCommandInteraction, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionReplyOptions } from 'discord.js';
 import { jobRunner } from '../../jobs/index.js';
 import { JobEvent, JobSnapshot } from '../../jobs/core/job-types';
 import { splitDiscordMessage } from '../markdown.js';
+import { conversationActivityGate } from './activity-gate.js';
+import { jobNotificationOutbox } from './job-notification-outbox.js';
 
 function fmtState(s: JobSnapshot['state']) {
   if (s === 'succeeded') return '✅ succeeded';
@@ -37,42 +39,91 @@ export async function postJobStarted(interaction: ChatInputCommandInteraction, j
   const reply = await interaction.fetchReply();
   if (reply && 'id' in reply) {
     const s = jobRunner.get(jobId);
-    if (s) {
-      s.origin.statusMessageId = (reply as any).id;
-    }
+    if (s) s.origin.statusMessageId = (reply as any).id;
   }
 }
 
-// Debounced edits by jobId
 const editTimers = new Map<string, NodeJS.Timeout>();
 
 export function attachJobNotifier(client: any) {
+  let dispatchTimer: NodeJS.Timeout | null = null;
+
+  const scheduleDeferredDispatch = () => {
+    if (dispatchTimer) return;
+    dispatchTimer = setTimeout(async () => {
+      dispatchTimer = null;
+      const pending = jobNotificationOutbox.getPending();
+
+      for (const item of pending) {
+        if (!item.critical) {
+          const active = conversationActivityGate.isActive({
+            guildId: item.guildId,
+            channelId: item.channelId,
+            threadId: item.threadId,
+            userId: item.userId,
+          });
+          if (active) continue;
+        }
+
+        try {
+          const ch = await client.channels.fetch(item.threadId ?? item.channelId);
+          if (!ch || !('send' in ch)) continue;
+
+          const jobs = item.jobs
+            .slice(-5)
+            .sort((a, b) => a.endedAt - b.endedAt)
+            .map((j) => {
+              const icon = j.state === 'succeeded' ? '✅' : j.state === 'failed' ? '❌' : j.state === 'timeout' ? '⏱️' : '🛑';
+              const err = j.error ? ` — ${String(j.error).slice(0, 120)}` : '';
+              return `- ${icon} **${j.name}** (\`${j.jobId}\`)${err}`;
+            });
+
+          const title = item.critical
+            ? '🚨 Background job update (critical)'
+            : item.jobs.length > 1
+              ? '📦 Background jobs completed'
+              : '✅ Background job completed';
+
+          await (ch as any).send({ content: [title, ...jobs].join('\n') });
+          jobNotificationOutbox.markSent(item.key);
+        } catch {
+          // keep pending; retry next cycle
+        }
+      }
+
+      if (jobNotificationOutbox.getPending().length > 0) scheduleDeferredDispatch();
+    }, 5000);
+  };
+
   jobRunner.onEvent(async (ev: JobEvent) => {
     const snap = jobRunner.get(ev.jobId);
+
+    if (ev.type === 'job:end' && snap) {
+      jobNotificationOutbox.enqueueFromSnapshot(snap);
+      scheduleDeferredDispatch();
+    }
+
     if (!snap?.origin?.channelId || !snap.origin.statusMessageId) return;
 
-    // debounce status edits
     if (editTimers.has(ev.jobId)) return;
-    editTimers.set(
-      ev.jobId,
-      setTimeout(async () => {
-        editTimers.delete(ev.jobId);
-        try {
-          const ch = await client.channels.fetch(snap.origin.threadId ?? snap.origin.channelId);
-          if (!ch || !('messages' in ch)) return;
-          const msg = await (ch as any).messages.fetch(snap.origin.statusMessageId);
-          const runtimeMs = snap.startedAt ? (snap.endedAt ?? Date.now()) - snap.startedAt : 0;
-          const line = snap.progress ? `\nProgress: ${snap.progress}` : '';
-          const content = `Job: **${snap.name}**\nID: \`${snap.jobId}\`\nState: ${fmtState(snap.state)} (${Math.round(runtimeMs / 1000)}s)${line}`;
-          await msg.edit({
-            content,
-            components: [jobActionRow(snap.jobId, snap.state === 'queued' || snap.state === 'running')],
-          });
-        } catch {
-          // ignore
-        }
-      }, 1250),
-    );
+    const t = setTimeout(async () => {
+      editTimers.delete(ev.jobId);
+      try {
+        const ch = await client.channels.fetch(snap.origin.threadId ?? snap.origin.channelId);
+        if (!ch || !('messages' in ch)) return;
+        const msg = await (ch as any).messages.fetch(snap.origin.statusMessageId);
+        const runtimeMs = snap.startedAt ? (snap.endedAt ?? Date.now()) - snap.startedAt : 0;
+        const line = snap.progress ? `\nProgress: ${snap.progress}` : '';
+        const content = `Job: **${snap.name}**\nID: \`${snap.jobId}\`\nState: ${fmtState(snap.state)} (${Math.round(runtimeMs / 1000)}s)${line}`;
+        await msg.edit({
+          content,
+          components: [jobActionRow(snap.jobId, snap.state === 'queued' || snap.state === 'running')],
+        });
+      } catch {
+        // ignore
+      }
+    }, 1250);
+    editTimers.set(ev.jobId, t);
   });
 }
 
