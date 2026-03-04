@@ -95,9 +95,9 @@ export function attachJobNotifier(client: any) {
               : '✅ Background job completed';
 
           await (ch as any).send({ content: [title, ...jobs].join('\n') });
-          jobNotificationOutbox.markSent(item.key);
-        } catch {
-          // keep pending; retry next cycle
+          jobNotificationOutbox.markAttemptSuccess(item.key);
+        } catch (e) {
+          jobNotificationOutbox.markAttemptFailure(item.key, e instanceof Error ? e.message : String(e));
         }
       }
 

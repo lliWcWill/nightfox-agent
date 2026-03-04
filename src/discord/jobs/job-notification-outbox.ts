@@ -2,7 +2,7 @@ import type { JobSnapshot, JobState } from '../../jobs/core/job-types.js';
 
 type NonRunningState = Exclude<JobState, 'queued' | 'running'>;
 
-type OutboxStatus = 'pending' | 'sent';
+type OutboxStatus = 'pending' | 'sent' | 'failed';
 
 export type OutboxItem = {
   key: string;
@@ -12,6 +12,9 @@ export type OutboxItem = {
   userId?: string;
   statusMessageId?: string;
   status: OutboxStatus;
+  attempts: number;
+  nextAttemptAt: number;
+  lastError?: string;
   jobs: Array<{
     jobId: string;
     name: string;
@@ -63,6 +66,8 @@ export class JobNotificationOutbox {
         userId: s.origin.userId,
         statusMessageId: s.origin.statusMessageId,
         status: 'pending',
+        attempts: 0,
+        nextAttemptAt: Date.now(),
         jobs: [digest],
         critical,
         createdAt: Date.now(),
@@ -78,8 +83,27 @@ export class JobNotificationOutbox {
     return existing;
   }
 
-  getPending(): OutboxItem[] {
-    return Array.from(this.pendingByKey.values()).filter((i) => i.status === 'pending');
+
+  markAttemptFailure(key: string, error: string) {
+    const item = this.pendingByKey.get(key);
+    if (!item) return;
+    item.attempts += 1;
+    const backoffMs = Math.min(60_000, 2_000 * Math.pow(2, Math.max(0, item.attempts - 1)));
+    item.nextAttemptAt = Date.now() + backoffMs;
+    item.lastError = error.slice(0, 240);
+    item.status = item.attempts >= 8 ? 'failed' : 'pending';
+  }
+
+  markAttemptSuccess(key: string) {
+    this.markSent(key);
+  }
+
+  getFailed(): OutboxItem[] {
+    return Array.from(this.pendingByKey.values()).filter((i) => i.status === 'failed');
+  }
+
+  getPending(now = Date.now()): OutboxItem[] {
+    return Array.from(this.pendingByKey.values()).filter((i) => i.status === 'pending' && i.nextAttemptAt <= now);
   }
 
   markSent(key: string) {
