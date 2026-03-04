@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
-import { access, mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { constants as FS } from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { JobRecord } from '../job-manager.js';
 
 export type CodeRabbitPayload = {
@@ -103,8 +104,29 @@ async function writeReviewArtifacts(repoPath: string, jobId: string, raw: CodeRa
   const resultPath = path.join(dir, 'result.json');
   const summaryPath = path.join(dir, 'summary.md');
 
-  await writeFile(resultPath, JSON.stringify({ raw, parsed }, null, 2), 'utf8');
-  await writeFile(
+  const writeAtomic = async (finalPath: string, content: string) => {
+    const tmpPath = `${finalPath}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
+    let fh: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      fh = await open(tmpPath, 'w', 0o600);
+      await fh.writeFile(content, 'utf8');
+      await fh.sync();
+      await fh.close();
+      fh = undefined;
+      await rename(tmpPath, finalPath);
+    } catch (error) {
+      try {
+        if (fh) await fh.close();
+      } catch {}
+      try {
+        await unlink(tmpPath);
+      } catch {}
+      throw error;
+    }
+  };
+
+  await writeAtomic(resultPath, JSON.stringify({ raw, parsed }, null, 2));
+  await writeAtomic(
     summaryPath,
     [
       `# CodeRabbit Result (${jobId})`,
@@ -121,7 +143,6 @@ async function writeReviewArtifacts(repoPath: string, jobId: string, raw: CodeRa
       '## Exact Fixes',
       ...(parsed.exactFixes.length ? parsed.exactFixes.map((x) => `- ${x}`) : ['- none extracted']),
     ].join('\n'),
-    'utf8',
   );
 
   return { resultPath, summaryPath };
