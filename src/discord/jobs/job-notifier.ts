@@ -46,10 +46,15 @@ export async function postJobStarted(interaction: ChatInputCommandInteraction, j
   };
   await interaction.reply(opts);
 
-  const reply = await interaction.fetchReply();
-  if (reply && 'id' in reply) {
-    const s = jobRunner.get(jobId);
-    if (s) s.origin.statusMessageId = (reply as any).id;
+  try {
+    const reply = await interaction.fetchReply();
+    const replyId = reply && typeof (reply as any).id === 'string' ? String((reply as any).id) : null;
+    if (replyId) {
+      const s = jobRunner.get(jobId);
+      if (s) s.origin.statusMessageId = replyId;
+    }
+  } catch {
+    // non-fatal: status message can still be tracked via /jobs and /devops status
   }
 }
 
@@ -153,7 +158,13 @@ export function attachJobNotifier(client: any) {
 }
 
 export async function handleJobButton(i: ButtonInteraction) {
-  const [_, action, jobId] = i.customId.split(':');
+  const parts = String(i.customId || '').split(':');
+  const action = parts[1];
+  const jobId = parts[2];
+  if (!action || !jobId) {
+    return i.reply({ ephemeral: true, content: 'Invalid job action payload.' });
+  }
+
   const snap = jobRunner.get(jobId);
   if (!snap) return i.reply({ ephemeral: true, content: `Unknown job: ${jobId}` });
 
