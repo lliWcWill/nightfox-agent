@@ -7,6 +7,6 @@ export const jobManager = new JobManager(1);
 export const repoRoot = process.cwd();
 export const jobRegistry = defaultJobRegistry(repoRoot);
 jobRegistry.bootstrapFromDisk();
-jobRegistry.markOrphansAsFailed('Bot restarted; marking in-flight job as failed');
+jobRegistry.reconcileStartup('Bot restarted; reconciling in-flight jobs', 'timeout');
 
 export const jobRunner = new JobRunner(jobRegistry, 1);

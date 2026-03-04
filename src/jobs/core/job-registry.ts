@@ -27,9 +27,11 @@ export class JobRegistry {
       .slice(0, limit);
   }
 
-  apply(ev: JobEvent) {
+  apply(ev: JobEvent, opts?: { persist?: boolean; sweep?: boolean }) {
     const now = ev.at;
     const existing = this.jobs.get(ev.jobId);
+    const shouldPersist = opts?.persist ?? true;
+    const shouldSweep = opts?.sweep ?? true;
 
     if (!existing) {
       if (ev.type !== 'job:queued') throw new Error(`unknown job ${ev.jobId}`);
@@ -42,8 +44,8 @@ export class JobRegistry {
         logs: [],
       };
       this.jobs.set(ev.jobId, snap);
-      this.persist(ev);
-      this.sweep();
+      if (shouldPersist) this.persist(ev);
+      if (shouldSweep) this.sweep();
       return;
     }
 
@@ -75,8 +77,8 @@ export class JobRegistry {
         break;
     }
 
-    this.persist(ev);
-    this.sweep();
+    if (shouldPersist) this.persist(ev);
+    if (shouldSweep) this.sweep();
   }
 
   setOrigin(jobId: string, origin: JobSnapshot['origin']) {
@@ -114,7 +116,7 @@ export class JobRegistry {
         } else {
           const ex = this.jobs.get(ev.jobId);
           if (!ex) continue;
-          this.apply(ev);
+          this.apply(ev, { persist: false, sweep: false });
         }
       } catch {
         // ignore malformed line
@@ -124,14 +126,16 @@ export class JobRegistry {
     this.sweep();
   }
 
-  markOrphansAsFailed(reason: string) {
+  reconcileStartup(reason: string, mode: 'failed' | 'timeout' = 'failed') {
     const now = Date.now();
     for (const j of this.jobs.values()) {
       if (j.state === 'running' || j.state === 'queued') {
-        j.state = 'failed';
-        j.endedAt = now;
-        j.error = reason;
-        j.logs.push({ at: now, level: 'error', message: reason });
+        const endState = mode;
+        const msg = `${reason} (prev=${j.state})`;
+        this.apply({ type: 'job:log', jobId: j.jobId, level: 'error', message: msg, at: now });
+        this.apply({ type: 'job:end', jobId: j.jobId, state: endState, exitCode: null, at: now });
+        const live = this.jobs.get(j.jobId);
+        if (live) live.error = msg;
       }
     }
   }
