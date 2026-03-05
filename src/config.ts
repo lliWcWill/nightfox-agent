@@ -217,7 +217,7 @@ const envSchema = z.object({
     .string()
     .default('300000')
     .transform((val) => parseInt(val, 10)),
-  JOB_RECONCILE_MODE: z.enum(['failed', 'timeout']).default('timeout'),
+  JOB_RECONCILE_MODE: z.enum(['failed', 'timeout', 'resume-queued']).default('timeout'),
   JOB_APPROVAL_MODE: z.enum(['off', 'tiered', 'strict']).default('tiered'),
 });
 

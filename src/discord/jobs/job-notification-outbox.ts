@@ -60,8 +60,26 @@ export class JobNotificationOutbox {
     fs.mkdirSync(path.dirname(this.persistPath), { recursive: true });
     const data = JSON.stringify(Array.from(this.pendingByKey.values()), null, 2);
     const tmp = `${this.persistPath}.tmp`;
-    fs.writeFileSync(tmp, data, 'utf8');
-    fs.renameSync(tmp, this.persistPath);
+    const lock = `${this.persistPath}.lock`;
+
+    let lockFd: number | null = null;
+    try {
+      lockFd = fs.openSync(lock, 'wx');
+      const fd = fs.openSync(tmp, 'w');
+      try {
+        fs.writeFileSync(fd, data, 'utf8');
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.renameSync(tmp, this.persistPath);
+    } catch {
+      // another writer/process may be persisting; skip this cycle
+    } finally {
+      if (lockFd !== null) fs.closeSync(lockFd);
+      try { fs.unlinkSync(lock); } catch {}
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+    }
   }
 
   private bootstrapFromDisk() {

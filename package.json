@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "discord": "tsx watch src/discord-index.ts",
     "discord:start": "node dist/discord-index.js",
-    "smoke:jobs": "tsx scripts/portable-jobs-smoke.ts"
+    "smoke:jobs": "tsx scripts/portable-jobs-smoke.ts",
+    "smoke:phase3": "tsx scripts/jobs-phase3-smoke.ts"
   },
   "keywords": [
     "telegram",

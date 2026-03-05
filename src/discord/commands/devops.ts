@@ -17,6 +17,7 @@ import { agentDeepLoopJob, type AgentDeepLoopPayload } from '../../jobs/workers/
 import { postJobStarted } from '../jobs/job-notifier.js';
 import { approvalManager } from '../approvals/index.js';
 import { getApprovalDecision } from '../../jobs/core/approval-policy.js';
+import { jobNotificationOutbox } from '../jobs/job-notification-outbox.js';
 
 function repoPathFromEnvOrCwd() {
   return process.env.CLAUDEGRAM_REPO_PATH || process.cwd();
@@ -86,6 +87,7 @@ export async function devopsCommand(interaction: ChatInputCommandInteraction) {
       }
       const durationMs = (j.endedAt ?? Date.now()) - (j.startedAt ?? j.createdAt);
       const recentLogs = j.logs.slice(-8).map((l) => `- ${new Date(l.at).toISOString()} [${l.level}] ${l.message.slice(0, 180)}`);
+      const failedOutbox = jobNotificationOutbox.getFailed();
       await interaction.reply({
         content: [
           `**Job \`${j.jobId}\`**`,
@@ -94,6 +96,7 @@ export async function devopsCommand(interaction: ChatInputCommandInteraction) {
           `- **Duration**: ${Math.round(durationMs / 1000)}s`,
           `- **Exit Code**: ${j.exitCode ?? 'n/a'}`,
           j.error ? `- **Error**: \`${j.error.slice(0, 300)}\`` : null,
+          failedOutbox.length ? `- **Notification Outbox Failed**: ${failedOutbox.length}` : null,
           recentLogs.length ? `\n**Recent Logs**\n${recentLogs.join('\n')}` : null,
         ].filter(Boolean).join('\n'),
         ephemeral: true,
@@ -110,7 +113,9 @@ export async function devopsCommand(interaction: ChatInputCommandInteraction) {
       const durationMs = (j.endedAt ?? Date.now()) - (j.startedAt ?? j.createdAt);
       return `- \`${j.jobId}\` • **${j.name}** • ${j.state} • ${Math.round(durationMs / 1000)}s`;
     });
-    await interaction.reply({ content: `**Recent Jobs**\n${lines.join('\n')}`, ephemeral: true });
+    const failedOutbox = jobNotificationOutbox.getFailed();
+    const degraded = failedOutbox.length > 0 ? `\n⚠️ Outbox failed items: **${failedOutbox.length}**` : '';
+    await interaction.reply({ content: `**Recent Jobs**\n${lines.join('\n')}${degraded}`, ephemeral: true });
     return;
   }
 

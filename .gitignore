@@ -23,3 +23,10 @@ videos/agentTelly_original.mp4
 # runtime job logs
 .claudegram/jobs/
 logs/
+
+# local scratch/backups/artifacts
+*.bak.*
+*.tmp
+tmp/
+*.png
+.grok/

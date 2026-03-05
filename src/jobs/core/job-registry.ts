@@ -159,14 +159,28 @@ export class JobRegistry {
     }
   }
 
-  reconcileStartup(reason: string, mode: 'failed' | 'timeout' = 'failed') {
+  reconcileStartup(reason: string, mode: 'failed' | 'timeout' | 'resume-queued' = 'failed') {
     const now = Date.now();
     for (const j of this.jobs.values()) {
-      if (j.state === 'running' || j.state === 'queued') {
-        const endState = mode;
+      if (j.state === 'running') {
+        const endState = mode === 'resume-queued' ? 'timeout' : mode;
         const msg = `${reason} (prev=${j.state})`;
         this.apply({ type: 'job:log', jobId: j.jobId, level: 'error', message: msg, at: now });
         this.apply({ type: 'job:end', jobId: j.jobId, state: endState, exitCode: null, at: now });
+        const live = this.jobs.get(j.jobId);
+        if (live) live.error = msg;
+        continue;
+      }
+
+      if (j.state === 'queued') {
+        if (mode === 'resume-queued') {
+          // keep queued jobs pending across restart for safer resume behavior
+          this.apply({ type: 'job:log', jobId: j.jobId, level: 'warn', message: `${reason} (prev=queued, resumed)`, at: now });
+          continue;
+        }
+        const msg = `${reason} (prev=queued)`;
+        this.apply({ type: 'job:log', jobId: j.jobId, level: 'error', message: msg, at: now });
+        this.apply({ type: 'job:end', jobId: j.jobId, state: mode, exitCode: null, at: now });
         const live = this.jobs.get(j.jobId);
         if (live) live.error = msg;
       }
