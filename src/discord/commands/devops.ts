@@ -15,6 +15,8 @@ import {
 } from '../../jobs/workers/devops-maintenance.js';
 import { agentDeepLoopJob, type AgentDeepLoopPayload } from '../../jobs/workers/agent-deep-loop.js';
 import { postJobStarted } from '../jobs/job-notifier.js';
+import { approvalManager } from '../approvals/index.js';
+import { getApprovalDecision } from '../../jobs/core/approval-policy.js';
 
 function repoPathFromEnvOrCwd() {
   return process.env.CLAUDEGRAM_REPO_PATH || process.cwd();
@@ -175,17 +177,43 @@ export async function devopsCommand(interaction: ChatInputCommandInteraction) {
     threadId: interaction.channel?.isThread() ? interaction.channelId : undefined,
     userId: interaction.user.id,
   };
-  const idempotencyKey = makeIdempotencyKey(`devops:${jobName}`, origin, {
+  const timeoutMs = jobName === 'agent-loop-30m' ? 1000 * 60 * 30 : 1000 * 60 * 15;
+  const fullJobName = `devops:${jobName}`;
+  const decision = getApprovalDecision(fullJobName, timeoutMs);
+
+  if (decision.requiresApproval) {
+    const approval = approvalManager.create({
+      summary: `Approve ${fullJobName}? (tier ${decision.tier})`,
+      details: `Reason: ${decision.reason}`,
+      requestedByUserId: interaction.user.id,
+      channelId: interaction.channelId,
+      threadId: interaction.channel?.isThread() ? interaction.channelId : undefined,
+    });
+
+    await interaction.reply({
+      ephemeral: true,
+      content: `Approval required for **${fullJobName}**.\n${decision.reason}`,
+      components: [approvalManager.renderButtons(approval.id)],
+    });
+
+    const decided = await approvalManager.awaitDecision(approval.id);
+    if (decided.state !== 'approved') {
+      await interaction.followUp({ ephemeral: true, content: `Job not queued. Approval state: **${decided.state}**.` });
+      return;
+    }
+  }
+
+  const idempotencyKey = makeIdempotencyKey(fullJobName, origin, {
     repoPath,
     deepTask: deepTask ?? null,
     deepModel: deepModel ?? null,
   });
 
   const jobId = jobRunner.enqueue({
-    name: `devops:${jobName}`,
+    name: fullJobName,
     origin,
     handler,
-    timeoutMs: jobName === 'agent-loop-30m' ? 1000 * 60 * 30 : 1000 * 60 * 15,
+    timeoutMs,
     idempotencyKey,
   });
 
