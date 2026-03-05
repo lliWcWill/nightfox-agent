@@ -26,6 +26,22 @@ type Running = {
   timeout?: NodeJS.Timeout;
   stallWatchdog?: NodeJS.Timeout;
   lastActivityAt: number;
+  startedAt: number;
+};
+
+type JobMetricsSnapshot = {
+  totalQueued: number;
+  totalStarted: number;
+  totalEnded: number;
+  totalSucceeded: number;
+  totalFailed: number;
+  totalCanceled: number;
+  totalTimeout: number;
+  queueDepth: number;
+  running: boolean;
+  peakQueueDepth: number;
+  waitP95Ms: number;
+  runP95Ms: number;
 };
 
 export class JobRunner {
@@ -35,6 +51,18 @@ export class JobRunner {
   private running: Running | null = null;
   private concurrency: number;
   private retrySpecs = new Map<string, RetrySpec>();
+  private metrics = {
+    totalQueued: 0,
+    totalStarted: 0,
+    totalEnded: 0,
+    totalSucceeded: 0,
+    totalFailed: 0,
+    totalCanceled: 0,
+    totalTimeout: 0,
+    peakQueueDepth: 0,
+    waitSamples: [] as number[],
+    runSamples: [] as number[],
+  };
 
   constructor(registry: JobRegistry, concurrency = 1) {
     this.registry = registry;
@@ -67,6 +95,8 @@ export class JobRunner {
     this.emit({ type: 'job:queued', jobId, name: opts.name, at });
 
     this.queue.push({ ...opts, jobId, createdAt: at });
+    this.metrics.totalQueued += 1;
+    if (this.queue.length > this.metrics.peakQueueDepth) this.metrics.peakQueueDepth = this.queue.length;
     this.retrySpecs.set(jobId, {
       name: opts.name,
       origin: { ...opts.origin },
@@ -110,6 +140,23 @@ export class JobRunner {
     return this.running?.jobId ?? null;
   }
 
+  getMetrics(): JobMetricsSnapshot {
+    return {
+      totalQueued: this.metrics.totalQueued,
+      totalStarted: this.metrics.totalStarted,
+      totalEnded: this.metrics.totalEnded,
+      totalSucceeded: this.metrics.totalSucceeded,
+      totalFailed: this.metrics.totalFailed,
+      totalCanceled: this.metrics.totalCanceled,
+      totalTimeout: this.metrics.totalTimeout,
+      queueDepth: this.queue.length,
+      running: Boolean(this.running),
+      peakQueueDepth: this.metrics.peakQueueDepth,
+      waitP95Ms: this.p95(this.metrics.waitSamples),
+      runP95Ms: this.p95(this.metrics.runSamples),
+    };
+  }
+
   cancel(jobId: string): boolean {
     // cancel queued
     const idx = this.queue.findIndex((q) => q.jobId === jobId);
@@ -143,7 +190,9 @@ export class JobRunner {
     const abort = new AbortController();
     const atStart = Date.now();
 
-    this.running = { jobId, abort, lastActivityAt: atStart };
+    this.running = { jobId, abort, lastActivityAt: atStart, startedAt: atStart };
+    this.metrics.totalStarted += 1;
+    this.pushSample(this.metrics.waitSamples, Math.max(0, atStart - next.createdAt));
     this.registry.apply({ type: 'job:start', jobId, at: atStart });
     this.emit({ type: 'job:start', jobId, at: atStart });
 
@@ -201,6 +250,9 @@ export class JobRunner {
       }
       this.registry.apply({ type: 'job:end', jobId, state: 'succeeded', exitCode, at: atEnd });
       this.emit({ type: 'job:end', jobId, state: 'succeeded', exitCode, at: atEnd });
+      this.metrics.totalEnded += 1;
+      this.metrics.totalSucceeded += 1;
+      this.pushSample(this.metrics.runSamples, Math.max(0, atEnd - atStart));
     } catch (err: any) {
       const atEnd = Date.now();
       const isAbort = abort.signal.aborted;
@@ -210,6 +262,11 @@ export class JobRunner {
       ctx.log('error', msg);
       this.registry.apply({ type: 'job:end', jobId, state, exitCode: null, at: atEnd });
       this.emit({ type: 'job:end', jobId, state, exitCode: null, at: atEnd });
+      this.metrics.totalEnded += 1;
+      if (state === 'failed') this.metrics.totalFailed += 1;
+      if (state === 'canceled') this.metrics.totalCanceled += 1;
+      if (state === 'timeout') this.metrics.totalTimeout += 1;
+      this.pushSample(this.metrics.runSamples, Math.max(0, atEnd - atStart));
     } finally {
       if (this.running?.timeout) clearTimeout(this.running.timeout);
       if (this.running?.stallWatchdog) clearInterval(this.running.stallWatchdog);
@@ -217,5 +274,17 @@ export class JobRunner {
       // next
       void this.pump();
     }
+  }
+
+  private pushSample(arr: number[], value: number) {
+    arr.push(value);
+    if (arr.length > 500) arr.splice(0, arr.length - 500);
+  }
+
+  private p95(arr: number[]): number {
+    if (!arr.length) return 0;
+    const sorted = [...arr].sort((a, b) => a - b);
+    const idx = Math.max(0, Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1));
+    return sorted[idx] ?? 0;
   }
 }

@@ -113,9 +113,21 @@ export async function devopsCommand(interaction: ChatInputCommandInteraction) {
       const durationMs = (j.endedAt ?? Date.now()) - (j.startedAt ?? j.createdAt);
       return `- \`${j.jobId}\` • **${j.name}** • ${j.state} • ${Math.round(durationMs / 1000)}s`;
     });
+    const m = jobRunner.getMetrics();
     const failedOutbox = jobNotificationOutbox.getFailed();
-    const degraded = failedOutbox.length > 0 ? `\n⚠️ Outbox failed items: **${failedOutbox.length}**` : '';
-    await interaction.reply({ content: `**Recent Jobs**\n${lines.join('\n')}${degraded}`, ephemeral: true });
+    const degradedFlags: string[] = [];
+    if (failedOutbox.length > 0) degradedFlags.push(`outbox_failed=${failedOutbox.length}`);
+    if (m.totalTimeout > 0) degradedFlags.push(`timeouts=${m.totalTimeout}`);
+
+    const metricsBlock = [
+      '**Health**',
+      `- queue_depth=${m.queueDepth} running=${m.running ? 1 : 0} peak_queue=${m.peakQueueDepth}`,
+      `- totals queued=${m.totalQueued} started=${m.totalStarted} ended=${m.totalEnded} ok=${m.totalSucceeded} failed=${m.totalFailed} canceled=${m.totalCanceled} timeout=${m.totalTimeout}`,
+      `- latency wait_p95=${Math.round(m.waitP95Ms)}ms run_p95=${Math.round(m.runP95Ms)}ms`,
+      degradedFlags.length ? `- degraded: ${degradedFlags.join(', ')}` : '- degraded: none',
+    ].join('\n');
+
+    await interaction.reply({ content: `**Recent Jobs**\n${lines.join('\n')}\n\n${metricsBlock}`, ephemeral: true });
     return;
   }
 
