@@ -19,6 +19,7 @@ const CLAUDE_MODELS: ModelInfo[] = [
 ];
 
 const OPENAI_MODELS: ModelInfo[] = [
+  { id: 'gpt-5.4', label: 'GPT-5.4', description: 'Primary coding/agent model (1M context where available)' },
   { id: 'gpt-5.2', label: 'GPT-5.2', description: 'Flagship — best for coding & agentic tasks' },
   { id: 'gpt-5.2-pro', label: 'GPT-5.2 Pro', description: 'Maximum capability (expensive)' },
   { id: 'gpt-5.1', label: 'GPT-5.1', description: 'Previous flagship' },

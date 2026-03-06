@@ -183,7 +183,7 @@ export class OpenAIProvider implements AgentProvider {
 
     const requestedModel = normalizeModelName(model);
     const chatModel = normalizeModelName(this.chatModels.get(chatId));
-    const defaultModel = normalizeModelName(config.OPENAI_DEFAULT_MODEL) ?? 'gpt-5.3-codex-high';
+    const defaultModel = normalizeModelName(config.OPENAI_DEFAULT_MODEL) ?? 'gpt-5.4';
 
     const emitProviderEvent = (type: string, data?: Record<string, unknown>) => {
       try {

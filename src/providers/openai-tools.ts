@@ -825,7 +825,7 @@ function createDelegateCodexHighReviewTool() {
   return tool({
     name: 'delegate_codex_high_review',
     description:
-      'Queue a Codex extra-high (gpt-5.3-codex-high) deep review loop for feature/code review tasks.',
+      'Queue a strict deep review loop using primary model (gpt-5.4) for feature/code review tasks.',
     parameters: z.object({
       task: z.string().describe('What should be reviewed or validated'),
       max_iterations: z.number().nullable().optional().describe('Optional max loop iterations (default 24)'),
@@ -850,7 +850,7 @@ function createDelegateCodexHighReviewTool() {
         const handler = agentDeepLoopJob({
           chatId,
           task: reviewTask,
-          model: 'gpt-5.3-codex-high',
+          model: 'gpt-5.4',
           maxIterations:
             typeof max_iterations === 'number'
               ? Math.max(1, Math.min(64, Math.floor(max_iterations)))
@@ -865,7 +865,7 @@ function createDelegateCodexHighReviewTool() {
         const idempotencyKey = makeIdempotencyKey('agent:codex-high-review', origin, {
           chatId,
           task: reviewTask,
-          model: 'gpt-5.3-codex-high',
+          model: 'gpt-5.4',
           max_iterations: max_iterations ?? null,
         });
 
@@ -887,7 +887,7 @@ function createDelegateCodexHighReviewTool() {
         return JSON.stringify({
           status: 'queued',
           jobId,
-          model: 'gpt-5.3-codex-high',
+          model: 'gpt-5.4',
           chatId,
         });
       } catch (err) {
