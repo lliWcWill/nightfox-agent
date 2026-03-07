@@ -513,6 +513,37 @@ async function compressTwoPass(
   });
 }
 
+async function convertGifLikeToMp4(inputPath: string, outputPath: string): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    execFile(
+      resolveBin('ffmpeg'),
+      [
+        '-y', '-i', inputPath,
+        '-movflags', '+faststart',
+        '-pix_fmt', 'yuv420p',
+        '-vf', 'fps=30,scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos',
+        '-an',
+        '-c:v', 'libx264',
+        outputPath,
+      ],
+      { timeout: FFMPEG_COMPRESS_TIMEOUT_MS },
+      (error, _stdout, stderr) => {
+        if (error) {
+          const msg = (stderr || '').trim() || error.message;
+          reject(new Error(`ffmpeg gif->mp4 convert failed: ${msg}`));
+          return;
+        }
+        try {
+          const stat = fs.statSync(outputPath);
+          resolve(stat.size);
+        } catch (statError) {
+          reject(statError instanceof Error ? statError : new Error('Failed to stat converted mp4'));
+        }
+      }
+    );
+  });
+}
+
 function getUrlExtension(urlString: string, fallback: string): string {
   try {
     const url = new URL(urlString);
@@ -651,6 +682,7 @@ export async function downloadRedditVideo(
 
   let finalPath: string;
   let finalSize: number;
+  let fromDirectGifLike = false;
 
   try {
     if (source.type === 'dash') {
@@ -722,10 +754,23 @@ export async function downloadRedditVideo(
       finalSize = await downloadFile(source.url, directPath, VIDEO_DOWNLOAD_TIMEOUT_SEC);
       finalPath = directPath;
       console.log(`[vReddit] Direct media downloaded: ${(finalSize / 1024 / 1024).toFixed(1)}MB`);
+
+      const extLower = ext.toLowerCase();
+      if (extLower === '.gif' || extLower === '.gifv' || extLower === '.webp') {
+        console.log('[vReddit] Converting direct GIF-like media to MP4...');
+        const convertedPath = path.join(tempDir, 'video_direct_converted.mp4');
+        const convertedSize = await convertGifLikeToMp4(directPath, convertedPath);
+        finalPath = convertedPath;
+        finalSize = convertedSize;
+        fromDirectGifLike = true;
+        console.log(`[vReddit] Direct GIF-like converted to MP4: ${(finalSize / 1024 / 1024).toFixed(1)}MB`);
+      }
     }
 
     const compressThresholdBytes = COMPRESS_THRESHOLD_MB * 1024 * 1024;
-    const needsCompress = finalSize > maxVideoBytes || finalSize > compressThresholdBytes;
+    const needsCompress = fromDirectGifLike
+      ? (finalSize > maxVideoBytes)
+      : (finalSize > maxVideoBytes || finalSize > compressThresholdBytes);
 
     if (needsCompress) {
       const reason = finalSize > maxVideoBytes
