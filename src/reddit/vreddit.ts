@@ -16,6 +16,7 @@ const COMPRESS_THRESHOLD_MB = 15;
 
 type VideoSource =
   | { type: 'dash'; url: string }
+  | { type: 'direct'; url: string }
   | { type: 'external'; url: string }
   | null;
 
@@ -146,9 +147,16 @@ function extractExternalUrlFromHtml(html: string): string | null {
   const match = html.match(/data-url="(https?:\/\/[^"]+)"/);
   if (!match) return null;
   const url = match[1];
-  // Skip Reddit self-links and images
-  if (url.includes('reddit.com') || url.includes('redd.it')) return null;
-  if (/\.(jpg|jpeg|png|gif|webp)(\?|$)/i.test(url)) return null;
+  // Skip Reddit self-links, but allow direct i.redd.it media URLs
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const isDirectRedditMedia = host === 'i.redd.it' && /\.(mp4|mov|webm|gif|gifv)(\?|$)/i.test(parsed.pathname);
+    if (!isDirectRedditMedia && (url.includes('reddit.com') || url.includes('redd.it'))) return null;
+  } catch {
+    return null;
+  }
+  if (/\.(jpg|jpeg|png|webp)(\?|$)/i.test(url)) return null;
   // Validate protocol to prevent SSRF
   if (!isValidProtocol(url)) return null;
   return url;
@@ -598,6 +606,13 @@ async function resolveVideoSource(input: string): Promise<VideoSource> {
   // Fallback: check for external video embed (e.g. redgifs.com)
   const externalUrl = extractExternalUrlFromHtml(html);
   if (externalUrl) {
+    try {
+      const host = new URL(externalUrl).hostname.toLowerCase();
+      if (host === 'i.redd.it') {
+        console.log(`[vReddit] Found direct Reddit media URL: ${externalUrl}`);
+        return { type: 'direct', url: externalUrl };
+      }
+    } catch { /* fall through */ }
     console.log(`[vReddit] Found external video embed: ${externalUrl}`);
     return { type: 'external', url: externalUrl };
   }
@@ -676,7 +691,7 @@ export async function downloadRedditVideo(
           console.warn('[vReddit] Merge failed, sending video-only:', error);
         }
       }
-    } else {
+    } else if (source.type === 'external') {
       // === External embed pipeline (yt-dlp) ===
       let domain: string;
       try {
@@ -691,6 +706,22 @@ export async function downloadRedditVideo(
       finalSize = await downloadWithYtDlp(source.url, ytdlpPath);
       finalPath = ytdlpPath;
       console.log(`[vReddit] yt-dlp downloaded: ${(finalSize / 1024 / 1024).toFixed(1)}MB`);
+    } else {
+      // === Direct media URL pipeline (e.g. i.redd.it/*.gif|*.mp4) ===
+      let domain: string;
+      try {
+        domain = new URL(source.url).hostname;
+      } catch {
+        domain = 'direct media';
+      }
+      console.log(`[vReddit] Downloading direct media URL: ${source.url}`);
+      onProgress?.(`Downloading video from ${domain}...`);
+
+      const ext = getUrlExtension(source.url, '.mp4');
+      const directPath = path.join(tempDir, `video_direct${ext}`);
+      finalSize = await downloadFile(source.url, directPath, VIDEO_DOWNLOAD_TIMEOUT_SEC);
+      finalPath = directPath;
+      console.log(`[vReddit] Direct media downloaded: ${(finalSize / 1024 / 1024).toFixed(1)}MB`);
     }
 
     const compressThresholdBytes = COMPRESS_THRESHOLD_MB * 1024 * 1024;
