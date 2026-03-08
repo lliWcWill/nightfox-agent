@@ -219,6 +219,10 @@ const envSchema = z.object({
     .transform((val) => parseInt(val, 10)),
   JOB_RECONCILE_MODE: z.enum(['failed', 'timeout', 'resume-queued']).default('timeout'),
   JOB_APPROVAL_MODE: z.enum(['off', 'tiered', 'strict']).default('tiered'),
+  JOB_ALLOW_HEADLESS_ORIGIN: z
+    .string()
+    .default('true')
+    .transform((val) => val.toLowerCase() === 'true'),
 });
 
 const parsed = envSchema.safeParse(process.env);
