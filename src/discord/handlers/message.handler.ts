@@ -9,7 +9,7 @@ import {
 } from 'discord.js';
 import * as fs from 'fs';
 import * as path from 'path';
-import { discordChatId } from '../id-mapper.js';
+import { discordSessionId } from '../id-mapper.js';
 import { isAuthorizedMessage } from '../middleware/auth.js';
 import { discordMessageSender } from '../message-sender.js';
 import { splitDiscordMessage } from '../markdown.js';
@@ -176,10 +176,13 @@ async function handleImageAttachment(
   isThread: boolean,
   isMentioned: boolean,
 ): Promise<void> {
-  const chatId = discordChatId(message.author.id);
-  const channelId = message.channelId;
+    const chatId = discordSessionId(message.author.id, message.channelId);
+    const parentChatId = message.channel.isThread() && message.channel.parentId
+      ? discordSessionId(message.author.id, message.channel.parentId)
+      : undefined;
+    const channelId = message.channelId;
 
-  const session = sessionManager.getSession(chatId);
+    const session = sessionManager.getSessionOrInherit(chatId, parentChatId);
   if (!session) {
     await message.reply('No project set. Use `/project <path>` first.');
     return;
@@ -399,13 +402,15 @@ export async function handleMessage(message: Message): Promise<void> {
 
   if (!text || text.trim().length === 0) return;
 
-  // Session key uses the user's ID, not the channel ID
-  const chatId = discordChatId(message.author.id);
-  // Channel ID is used for message sending/streaming
-  const channelId = message.channelId;
+    const chatId = discordSessionId(message.author.id, message.channelId);
+    const parentChatId = message.channel.isThread() && message.channel.parentId
+      ? discordSessionId(message.author.id, message.channel.parentId)
+      : undefined;
+    // Channel ID is used for message sending/streaming
+    const channelId = message.channelId;
 
-  // Check for active session
-  const session = sessionManager.getSession(chatId);
+    // Check for active session
+    const session = sessionManager.getSessionOrInherit(chatId, parentChatId);
   if (!session) {
     await message.reply('No project set. Use `/project <path>` first.');
     return;
@@ -492,20 +497,23 @@ export async function handleImageButtons(interaction: ButtonInteraction): Promis
   const action = parts[1];
   const messageId = parts[2];
   if (!action || !messageId) {
-    await interaction.reply({ content: 'Invalid image action.', ephemeral: true });
+    await interaction.reply({ content: 'Invalid image action.', flags: 64 });
     return;
   }
 
-  const chatId = discordChatId(interaction.user.id);
-  const session = sessionManager.getSession(chatId);
+    const chatId = discordSessionId(interaction.user.id, interaction.channelId);
+    const parentChatId = interaction.channel?.isThread() && interaction.channel.parentId
+      ? discordSessionId(interaction.user.id, interaction.channel.parentId)
+      : undefined;
+    const session = sessionManager.getSessionOrInherit(chatId, parentChatId);
   if (!session) {
-    await interaction.reply({ content: 'No project set. Use `/project <path>` first.', ephemeral: true });
+    await interaction.reply({ content: 'No project set. Use `/project <path>` first.', flags: 64 });
     return;
   }
 
   const artifact = sessionManager.getImageArtifact(chatId, messageId);
   if (!artifact) {
-    await interaction.reply({ content: 'Image not found in session. Please re-upload the image.', ephemeral: true });
+    await interaction.reply({ content: 'Image not found in session. Please re-upload the image.', flags: 64 });
     return;
   }
 
@@ -515,7 +523,7 @@ export async function handleImageButtons(interaction: ButtonInteraction): Promis
   const dataUrl = 'data:' + mediaType + ';base64,' + imageBase64;
 
   if (action === "chat") {
-    await interaction.reply({ content: 'Chatting about image…', ephemeral: true });
+    await interaction.reply({ content: 'Chatting about image…', flags: 64 });
     const prompt = buildImageReadPrompt({ relativePath: artifact.relativePath, caption: artifact.caption || "" });
     const agentItems: AgentInputItem[] = [
       userItem([
@@ -525,8 +533,8 @@ export async function handleImageButtons(interaction: ButtonInteraction): Promis
     ];
     const response = await sendToAgent(chatId, agentItems as any, { platform: "discord" });
     const chunks = splitDiscordMessage(response.text, 1900);
-    await interaction.followUp({ content: chunks[0], ephemeral: true });
-    for (const c of chunks.slice(1)) await interaction.followUp({ content: c, ephemeral: true });
+    await interaction.followUp({ content: chunks[0], flags: 64 });
+    for (const c of chunks.slice(1)) await interaction.followUp({ content: c, flags: 64 });
     return;
   }
 
@@ -540,21 +548,21 @@ export async function handleImageButtons(interaction: ButtonInteraction): Promis
     ];
 
     if (action === "ocr") {
-      await interaction.reply({ content: 'Running OCR…', ephemeral: true });
+      await interaction.reply({ content: 'Running OCR…', flags: 64 });
       const response = await sendToAgent(chatId, agentItems as any, { platform: "discord" });
       const chunks = splitDiscordMessage(response.text, 1900);
-      await interaction.followUp({ content: chunks[0], ephemeral: true });
-      for (const c of chunks.slice(1)) await interaction.followUp({ content: c, ephemeral: true });
+      await interaction.followUp({ content: chunks[0], flags: 64 });
+      for (const c of chunks.slice(1)) await interaction.followUp({ content: c, flags: 64 });
       return;
     }
 
     const channel = interaction.channel;
     if (!channel || channel.type !== ChannelType.GuildText) {
-      await interaction.reply({ content: 'Cannot start a thread in this channel type.', ephemeral: true });
+      await interaction.reply({ content: 'Cannot start a thread in this channel type.', flags: 64 });
       return;
     }
 
-    await interaction.reply({ content: 'Creating thread + running OCR…', ephemeral: true });
+    await interaction.reply({ content: 'Creating thread + running OCR…', flags: 64 });
 
     const threadName = '🧾 OCR';
     try {
@@ -566,12 +574,12 @@ export async function handleImageButtons(interaction: ButtonInteraction): Promis
       const chunks = splitDiscordMessage(response.text, 1900);
       await thread.send(chunks[0]);
       for (const c of chunks.slice(1)) await thread.send(c);
-      await interaction.followUp({ content: "Thread created: " + thread.toString(), ephemeral: true });
+      await interaction.followUp({ content: "Thread created: " + thread.toString(), flags: 64 });
     } catch (err) {
-      await interaction.followUp({ content: 'Failed to create thread: ' + sanitizeError(err), ephemeral: true });
+      await interaction.followUp({ content: 'Failed to create thread: ' + sanitizeError(err), flags: 64 });
     }
     return;
   }
 
-  await interaction.reply({ content: 'Unknown image action.', ephemeral: true });
+  await interaction.reply({ content: 'Unknown image action.', flags: 64 });
 }

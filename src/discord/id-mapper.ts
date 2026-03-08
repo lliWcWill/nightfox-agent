@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 /**
  * Maps Discord snowflake IDs (64-bit strings) to negative numbers
  * for compatibility with existing Maps that use number keys.
@@ -15,4 +17,19 @@ const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
  */
 export function discordChatId(snowflake: string): number {
   return -Number(BigInt(snowflake) % MAX_SAFE);
+}
+
+/**
+ * Map a Discord user+channel/thread pair to a stable negative numeric session ID.
+ *
+ * This isolates per-thread/per-channel conversation state while still allowing
+ * the same Discord user to have multiple independent sessions.
+ */
+export function discordSessionId(userSnowflake: string, channelSnowflake: string): number {
+  const digest = crypto
+    .createHash('sha256')
+    .update(`discord:${userSnowflake}:${channelSnowflake}`)
+    .digest('hex')
+    .slice(0, 14);
+  return -Number(BigInt(`0x${digest}`) % MAX_SAFE);
 }

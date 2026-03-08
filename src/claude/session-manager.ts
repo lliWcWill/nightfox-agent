@@ -42,6 +42,14 @@ interface Session {
 class SessionManager {
   private sessions: Map<number, Session> = new Map();
 
+  private log(action: string, details: Record<string, string | number | undefined>): void {
+    const fields = Object.entries(details)
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(' ');
+    console.log(`[Session] ${action}${fields ? ` ${fields}` : ''}`);
+  }
+
   setImageArtifact(chatId: number, messageId: string, artifact: { path: string; relativePath: string; caption?: string }): void {
     const session = this.sessions.get(chatId);
     if (!session) return;
@@ -73,6 +81,14 @@ class SessionManager {
     return this.sessions.get(chatId);
   }
 
+  getSessionOrInherit(chatId: number, parentChatId?: number): Session | undefined {
+    const existing = this.sessions.get(chatId);
+    if (existing) return existing;
+    if (typeof parentChatId !== 'number') return undefined;
+    this.log('inherit', { scope: 'user+channel', targetChatId: chatId, parentChatId });
+    return this.forkSession(parentChatId, chatId);
+  }
+
   createSession(chatId: number, workingDirectory: string, conversationId?: string): Session {
     const resolved = resolveWorkingDirectory(workingDirectory);
     const session: Session = {
@@ -83,6 +99,7 @@ class SessionManager {
       lastActivity: new Date(),
     };
     this.sessions.set(chatId, session);
+    this.log('create', { scope: 'user+channel', chatId, conversationId: session.conversationId });
 
     // Persist to history
     sessionHistory.saveSession(chatId, session.conversationId, resolved, '', session.claudeSessionId);
@@ -116,7 +133,33 @@ class SessionManager {
 
   clearSession(chatId: number): void {
     this.sessions.delete(chatId);
+    this.log('clear', { chatId });
     // Note: We don't clear history here - history is for resuming past sessions
+  }
+
+  forkSession(sourceChatId: number, targetChatId: number): Session | undefined {
+    const source = this.sessions.get(sourceChatId);
+    if (!source) return undefined;
+
+    const forked: Session = {
+      conversationId: source.conversationId,
+      claudeSessionId: source.claudeSessionId,
+      openaiConversationId: source.openaiConversationId,
+      workingDirectory: source.workingDirectory,
+      images: source.images ? { ...source.images } : undefined,
+      createdAt: source.createdAt,
+      lastActivity: new Date(),
+    };
+
+    this.sessions.set(targetChatId, forked);
+    this.log('fork', {
+      scope: 'user+channel',
+      sourceChatId,
+      targetChatId,
+      conversationId: forked.conversationId,
+    });
+    sessionHistory.saveSession(targetChatId, forked.conversationId, forked.workingDirectory, '', forked.claudeSessionId);
+    return forked;
   }
 
   resumeSession(chatId: number, conversationId: string): Session | undefined {
@@ -135,6 +178,7 @@ class SessionManager {
       lastActivity: new Date(),
     };
     this.sessions.set(chatId, session);
+    this.log('restore', { scope: 'user+channel', chatId, conversationId });
 
     // Update history activity (with resolved path)
     sessionHistory.saveSession(chatId, conversationId, resolvedPath, historyEntry.lastMessagePreview, historyEntry.claudeSessionId);
@@ -149,6 +193,40 @@ class SessionManager {
     }
 
     return this.resumeSession(chatId, lastEntry.conversationId);
+  }
+
+  resumeSessionAs(sourceChatId: number, conversationId: string, targetChatId: number): Session | undefined {
+    const historyEntry = sessionHistory.getSessionByConversationId(sourceChatId, conversationId);
+    if (!historyEntry) {
+      return undefined;
+    }
+
+    const resolvedPath = resolveWorkingDirectory(historyEntry.projectPath);
+    const session: Session = {
+      conversationId: historyEntry.conversationId,
+      claudeSessionId: historyEntry.claudeSessionId,
+      openaiConversationId: historyEntry.openaiConversationId,
+      workingDirectory: resolvedPath,
+      createdAt: new Date(historyEntry.createdAt),
+      lastActivity: new Date(),
+    };
+    this.sessions.set(targetChatId, session);
+    this.log('restore-migrated', {
+      scope: 'user+channel',
+      sourceChatId,
+      targetChatId,
+      conversationId,
+    });
+    sessionHistory.saveSession(targetChatId, conversationId, resolvedPath, historyEntry.lastMessagePreview, historyEntry.claudeSessionId);
+    return session;
+  }
+
+  resumeLastSessionAs(sourceChatId: number, targetChatId: number): Session | undefined {
+    const lastEntry = sessionHistory.getLastSession(sourceChatId);
+    if (!lastEntry) {
+      return undefined;
+    }
+    return this.resumeSessionAs(sourceChatId, lastEntry.conversationId, targetChatId);
   }
 
   getSessionHistory(chatId: number, limit: number = 5): SessionHistoryEntry[] {

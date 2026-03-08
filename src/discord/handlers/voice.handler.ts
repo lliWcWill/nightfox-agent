@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { config } from '../../config.js';
-import { discordChatId } from '../id-mapper.js';
+import { discordSessionId } from '../id-mapper.js';
 import { discordMessageSender } from '../message-sender.js';
 import { sendToAgent } from '../../claude/agent.js';
 import { sessionManager } from '../../claude/session-manager.js';
@@ -34,7 +34,10 @@ export async function handleVoiceMessage(
   isThread: boolean,
   isMentioned: boolean,
 ): Promise<void> {
-  const chatId = discordChatId(message.author.id);
+  const chatId = discordSessionId(message.author.id, message.channelId);
+  const parentChatId = message.channel.isThread() && message.channel.parentId
+    ? discordSessionId(message.author.id, message.channel.parentId)
+    : undefined;
   const channelId = message.channelId;
 
   // Check for GROQ_API_KEY
@@ -44,7 +47,7 @@ export async function handleVoiceMessage(
   }
 
   // Check session
-  const session = sessionManager.getSession(chatId);
+  const session = sessionManager.getSessionOrInherit(chatId, parentChatId);
   if (!session) {
     await message.reply('No project set. Use `/project <path>` first.');
     return;

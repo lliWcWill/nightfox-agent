@@ -7,7 +7,7 @@ import {
   ComponentType,
 } from 'discord.js';
 import * as path from 'path';
-import { discordChatId } from '../id-mapper.js';
+import { discordChatId, discordSessionId } from '../id-mapper.js';
 import { sessionManager } from '../../claude/session-manager.js';
 
 const COLLECTOR_TIMEOUT_MS = 60_000;
@@ -40,15 +40,20 @@ function formatTimeAgo(date: Date): string {
  * @param interaction - The command interaction used to send the session list and receive button interactions
  */
 export async function handleResume(interaction: ChatInputCommandInteraction): Promise<void> {
-  const chatId = discordChatId(interaction.user.id);
+  const chatId = discordSessionId(interaction.user.id, interaction.channelId);
+  const legacyChatId = discordChatId(interaction.user.id);
 
   const history = sessionManager.getSessionHistory(chatId, 5);
-  const resumable = history.filter((entry) => entry.claudeSessionId);
+  const historySourceChatId = history.length > 0 || chatId === legacyChatId ? chatId : legacyChatId;
+  const effectiveHistory = history.length > 0 || chatId === legacyChatId
+    ? history
+    : sessionManager.getSessionHistory(legacyChatId, 5);
+  const resumable = effectiveHistory.filter((entry) => entry.claudeSessionId);
 
   if (resumable.length === 0) {
     await interaction.reply({
       content: 'No resumable sessions found.\n\nSessions need at least one Claude response to be resumable.\nUse `/project <path>` to start a new session.',
-      ephemeral: true,
+      flags: 64,
     });
     return;
   }
@@ -79,7 +84,7 @@ export async function handleResume(interaction: ChatInputCommandInteraction): Pr
 
   collector.on('collect', async (i: ButtonInteraction) => {
     if (i.user.id !== interaction.user.id) {
-      await i.reply({ content: 'Only the command author can use these buttons.', ephemeral: true });
+      await i.reply({ content: 'Only the command author can use these buttons.', flags: 64 });
       return;
     }
 
@@ -99,7 +104,9 @@ export async function handleResume(interaction: ChatInputCommandInteraction): Pr
       return;
     }
 
-    const session = sessionManager.resumeSession(chatId, entry.conversationId);
+      const session = historySourceChatId === chatId
+        ? sessionManager.resumeSession(chatId, entry.conversationId)
+        : sessionManager.resumeSessionAs(historySourceChatId, entry.conversationId, chatId);
     if (!session) {
       await i.update({ content: 'Failed to resume session.', components: [] });
       collector.stop();

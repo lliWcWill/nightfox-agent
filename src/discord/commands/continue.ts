@@ -1,6 +1,6 @@
 import { ChatInputCommandInteraction } from 'discord.js';
 import * as path from 'path';
-import { discordChatId } from '../id-mapper.js';
+import { discordChatId, discordSessionId } from '../id-mapper.js';
 import { sessionManager } from '../../claude/session-manager.js';
 
 /**
@@ -13,15 +13,17 @@ import { sessionManager } from '../../claude/session-manager.js';
  * @param interaction - The Discord chat input interaction that triggered the continue command
  */
 export async function handleContinue(interaction: ChatInputCommandInteraction): Promise<void> {
-  const chatId = discordChatId(interaction.user.id);
+  const chatId = discordSessionId(interaction.user.id, interaction.channelId);
+  const legacyChatId = discordChatId(interaction.user.id);
 
   try {
-    const session = sessionManager.resumeLastSession(chatId);
+    const session = sessionManager.resumeLastSession(chatId)
+      ?? (chatId !== legacyChatId ? sessionManager.resumeLastSessionAs(legacyChatId, chatId) : undefined);
 
     if (!session) {
       await interaction.reply({
         content: 'No previous session to continue.\n\nUse `/project <path>` to start a new session.',
-        ephemeral: true,
+        flags: 64,
       });
       return;
     }
@@ -36,12 +38,12 @@ export async function handleContinue(interaction: ChatInputCommandInteraction): 
       msg += `\nClaude session: \`${session.claudeSessionId.slice(0, 20)}...\``;
     }
 
-    await interaction.reply({ content: msg, ephemeral: true });
+    await interaction.reply({ content: msg, flags: 64 });
   } catch (error) {
     console.error('[Continue] Error:', error);
     await interaction.reply({
       content: 'An error occurred while resuming the session.',
-      ephemeral: true,
+      flags: 64,
     }).catch(() => {});
   }
 }

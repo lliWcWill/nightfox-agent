@@ -4,7 +4,7 @@ import {
   TextChannel,
   EmbedBuilder,
 } from 'discord.js';
-import { discordChatId } from '../id-mapper.js';
+import { discordSessionId } from '../id-mapper.js';
 import { discordMessageSender } from '../message-sender.js';
 import { sendToAgent } from '../../claude/agent.js';
 import { sessionManager } from '../../claude/session-manager.js';
@@ -72,12 +72,14 @@ async function streamResponse(
 export async function handleChat(interaction: ChatInputCommandInteraction): Promise<void> {
   const message = interaction.options.getString('message', true);
 
-  // Session key uses the user's ID
-  const chatId = discordChatId(interaction.user.id);
+  const chatId = discordSessionId(interaction.user.id, interaction.channelId);
+  const parentChatId = interaction.channel?.isThread() && interaction.channel.parentId
+    ? discordSessionId(interaction.user.id, interaction.channel.parentId)
+    : undefined;
 
-  const session = sessionManager.getSession(chatId);
+  const session = sessionManager.getSessionOrInherit(chatId, parentChatId);
   if (!session) {
-    await interaction.reply({ content: 'No project set. Use `/project <path>` first.', ephemeral: true });
+    await interaction.reply({ content: 'No project set. Use `/project <path>` first.', flags: 64 });
     return;
   }
 
