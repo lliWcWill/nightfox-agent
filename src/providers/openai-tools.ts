@@ -24,6 +24,7 @@ import { getApprovalDecision } from '../jobs/core/approval-policy.js';
 import { prepareAgentDeepLoopJob, prepareCodeRabbitReviewJob } from '../jobs/core/job-definitions.js';
 import { config } from '../config.js';
 import { delegatedSessionId } from '../discord/id-mapper.js';
+import { objectiveStore } from '../autonomy/index.js';
 import { getCurrentToolChatId, getCurrentToolJobId, getCurrentToolOrigin } from './openai-tool-context.js';
 
 import type { Tool } from '@openai/agents-core';
@@ -714,7 +715,7 @@ function buildReturnRoute(chatId: number | null | undefined, origin: { guildId?:
     platform: 'discord' as const,
     channelId: origin.channelId,
     threadId: origin.threadId,
-    guildId: origin.guildId,
+    guildId: typeof (origin as any).guildId === 'string' ? (origin as any).guildId : undefined,
     userId: origin.userId,
     parentChatId: typeof chatId === 'number' ? chatId : undefined,
     mode,
@@ -810,6 +811,22 @@ function createDelegateDeepTaskTool() {
           handoff: job.handoff,
           returnRoute,
         });
+        if (typeof chatId === 'number') {
+          objectiveStore.create({
+            chatId: effectiveParentChatId,
+            platform: 'discord',
+            channelId: origin.channelId,
+            threadId: origin.threadId,
+            guildId: typeof (origin as any).guildId === 'string' ? (origin as any).guildId : undefined,
+            userId: origin.userId,
+            summary: trimmed,
+            nextActions: ['Wait for delegated job completion.'],
+            parentJobId,
+            childJobIds: [jobId],
+            returnRoute,
+            budget: { maxAutonomyMinutes: 15, maxDelegations: 3, maxFollowups: 3 },
+          });
+        }
 
         return JSON.stringify({
           status: 'queued',
@@ -890,7 +907,7 @@ function createDelegateCodeRabbitReviewTool(cwd: string) {
           if (decision.requiresApproval) {
             throw new Error(`${jobName} requires approval (${decision.reason}). Run via /devops for approval flow.`);
           }
-          return jobRunner.enqueue({
+          const jobId = jobRunner.enqueue({
             name: job.name,
             lane: job.lane,
             origin: toolOrigin,
@@ -902,6 +919,23 @@ function createDelegateCodeRabbitReviewTool(cwd: string) {
             handoff: job.handoff,
             returnRoute,
           });
+          if (typeof chatId === 'number') {
+            objectiveStore.create({
+              chatId,
+              platform: 'discord',
+              channelId: toolOrigin.channelId,
+              threadId: toolOrigin.threadId,
+              guildId: typeof (toolOrigin as any).guildId === 'string' ? (toolOrigin as any).guildId : undefined,
+              userId: toolOrigin.userId,
+              summary: `CodeRabbit review (${t}) for ${repoPath}`,
+              nextActions: ['Wait for review completion.'],
+              parentJobId,
+              childJobIds: [jobId],
+              returnRoute,
+              budget: { maxAutonomyMinutes: 15, maxDelegations: 2, maxFollowups: 2 },
+            });
+          }
+          return jobId;
         });
 
         return JSON.stringify({
@@ -1011,6 +1045,22 @@ function createDelegateCodexHighReviewTool() {
           handoff: job.handoff,
           returnRoute,
         });
+        if (typeof chatId === 'number') {
+          objectiveStore.create({
+            chatId: effectiveParentChatId,
+            platform: 'discord',
+            channelId: origin.channelId,
+            threadId: origin.threadId,
+            guildId: typeof (origin as any).guildId === 'string' ? (origin as any).guildId : undefined,
+            userId: origin.userId,
+            summary: trimmed,
+            nextActions: ['Wait for high-review completion.'],
+            parentJobId,
+            childJobIds: [jobId],
+            returnRoute,
+            budget: { maxAutonomyMinutes: 15, maxDelegations: 2, maxFollowups: 2 },
+          });
+        }
 
         return JSON.stringify({
           status: 'queued',

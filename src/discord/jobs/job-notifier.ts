@@ -2,6 +2,7 @@ import { ButtonInteraction, ChatInputCommandInteraction, ActionRowBuilder, Butto
 import { jobRunner } from '../../jobs/index.js';
 import { JobEvent, JobSnapshot } from '../../jobs/core/job-types';
 import { synthesizeChildCompletionForParentSession } from '../../jobs/core/job-parent-handoff.js';
+import { autonomyScheduler } from '../../autonomy/autonomy-scheduler.js';
 import { splitDiscordMessage } from '../markdown.js';
 import { conversationActivityGate } from './activity-gate.js';
 import { jobNotificationOutbox } from './job-notification-outbox.js';
@@ -177,6 +178,7 @@ export function attachJobNotifier(client: any) {
     const snap = jobRunner.get(ev.jobId);
 
     if (ev.type === 'job:end' && snap) {
+      autonomyScheduler.wakeFromJobEnd(snap);
       try {
         if (snap.handoff?.mode === 'parent-session') {
           const parent = snap.parentJobId ? jobRunner.get(snap.parentJobId) : undefined;
