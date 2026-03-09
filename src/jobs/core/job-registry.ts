@@ -55,6 +55,7 @@ export class JobRegistry {
           stallTimeoutMs: ev.stallTimeoutMs,
           resumeSpec: ev.resumeSpec,
           handoff: ev.handoff,
+          returnRoute: ev.returnRoute,
           state: 'queued',
           origin: (null as any),
           logs: [],
@@ -102,6 +103,8 @@ export class JobRegistry {
         existing.artifacts = ev.artifacts;
         break;
       case 'job:queued':
+        existing.handoff = ev.handoff ?? existing.handoff;
+        existing.returnRoute = ev.returnRoute ?? existing.returnRoute;
         // ignore
         break;
     }

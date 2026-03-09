@@ -1,5 +1,5 @@
 import { ChatInputCommandInteraction } from 'discord.js';
-import { discordChatId } from '../id-mapper.js';
+import { discordChatId, discordSessionId } from '../id-mapper.js';
 import {
   cancelRequest,
   clearQueue,
@@ -17,11 +17,20 @@ import {
  * @param interaction - The Discord command interaction to respond to
  */
 export async function handleCancel(interaction: ChatInputCommandInteraction): Promise<void> {
-  const chatId = discordChatId(interaction.user.id);
+  const sessionChatId = discordSessionId(interaction.user.id, interaction.channelId);
+  const legacyChatId = discordChatId(interaction.user.id);
+  const chatIds = sessionChatId === legacyChatId
+    ? [sessionChatId]
+    : [sessionChatId, legacyChatId];
 
-  const wasProcessing = isProcessing(chatId);
-  const cancelled = await cancelRequest(chatId);
-  const clearedCount = clearQueue(chatId);
+  const wasProcessing = chatIds.some((chatId) => isProcessing(chatId));
+  let cancelled = false;
+  let clearedCount = 0;
+
+  for (const chatId of chatIds) {
+    cancelled = (await cancelRequest(chatId)) || cancelled;
+    clearedCount += clearQueue(chatId);
+  }
 
   if (cancelled || clearedCount > 0) {
     let message = 'Cancelled.';

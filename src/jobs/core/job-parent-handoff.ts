@@ -50,7 +50,7 @@ function buildParentSessionCompletionPrompt(child: JobSnapshot): string {
   if (!child.resultSummary && child.logs.length) {
     lines.push('', 'Recent child logs:');
     for (const entry of child.logs.slice(-6)) {
-      lines.push(`- ${entry.level}: ${entry.message}`);
+      lines.push(`- ${entry.level}: ${entry.message.slice(0, 300)}`);
     }
   }
 
@@ -69,10 +69,7 @@ export async function synthesizeChildCompletionForParentSession(params: {
   if (!handoff || handoff.mode !== 'parent-session') {
     return { ok: false, error: 'handoff not configured' };
   }
-  const parentJobId = params.parent?.jobId ?? params.child.parentJobId;
-  if (!parentJobId) {
-    return { ok: false, error: 'missing parent job id' };
-  }
+  const parentJobId = params.parent?.jobId ?? params.child.parentJobId ?? params.child.jobId;
 
   const parentChatId = handoff.parentChatId;
   const parentSession =

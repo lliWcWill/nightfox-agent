@@ -39,9 +39,13 @@ function renderCompletionAnnouncement(snap: JobSnapshot): string {
   return lines.join('\n');
 }
 
-async function sendAnnouncementToOrigin(client: any, snap: JobSnapshot, content: string): Promise<boolean> {
-  if (!snap.origin?.channelId) return false;
-  const ch = await client.channels.fetch(snap.origin.threadId ?? snap.origin.channelId);
+async function sendAnnouncementToRoute(
+  client: any,
+  route: { channelId: string; threadId?: string } | undefined,
+  content: string,
+): Promise<boolean> {
+  if (!route?.channelId) return false;
+  const ch = await client.channels.fetch(route.threadId ?? route.channelId);
   if (!ch || !('send' in ch)) {
     return false;
   }
@@ -50,6 +54,15 @@ async function sendAnnouncementToOrigin(client: any, snap: JobSnapshot, content:
     await (ch as any).send({ content: chunk });
   }
   return true;
+}
+
+async function sendAnnouncementToOrigin(client: any, snap: JobSnapshot, content: string): Promise<boolean> {
+  return sendAnnouncementToRoute(client, snap.origin, content);
+}
+
+async function sendAnnouncementToReturnRoute(client: any, snap: JobSnapshot, content: string): Promise<boolean> {
+  if (!snap.returnRoute || snap.returnRoute.platform !== 'discord') return false;
+  return sendAnnouncementToRoute(client, snap.returnRoute, content);
 }
 
 export function jobActionRow(jobId: string, canCancel: boolean, canRetry = false, canShowResult = false) {
@@ -164,25 +177,32 @@ export function attachJobNotifier(client: any) {
     const snap = jobRunner.get(ev.jobId);
 
     if (ev.type === 'job:end' && snap) {
-      if (snap.parentJobId) {
-        try {
-          if (snap.handoff?.mode === 'parent-session') {
-            const parent = jobRunner.get(snap.parentJobId);
-            const synthesized = await synthesizeChildCompletionForParentSession({
-              child: snap,
-              parent: parent ?? undefined,
-            });
-            if (synthesized.ok && await sendAnnouncementToOrigin(client, snap, synthesized.content)) {
+      try {
+        if (snap.handoff?.mode === 'parent-session') {
+          const parent = snap.parentJobId ? jobRunner.get(snap.parentJobId) : undefined;
+          const synthesized = await synthesizeChildCompletionForParentSession({
+            child: snap,
+            parent: parent ?? undefined,
+          });
+          if (synthesized.ok) {
+            if (await sendAnnouncementToReturnRoute(client, snap, synthesized.content)) {
+              return;
+            }
+            if (await sendAnnouncementToOrigin(client, snap, synthesized.content)) {
               return;
             }
           }
-
-          if (await sendAnnouncementToOrigin(client, snap, renderCompletionAnnouncement(snap))) {
-            return;
-          }
-        } catch {
-          // Fall back to outbox delivery below if direct announce fails.
         }
+
+        const fallback = renderCompletionAnnouncement(snap);
+        if (await sendAnnouncementToReturnRoute(client, snap, fallback)) {
+          return;
+        }
+        if (await sendAnnouncementToOrigin(client, snap, fallback)) {
+          return;
+        }
+      } catch {
+        // Fall back to outbox delivery below if direct announce fails.
       }
       jobNotificationOutbox.enqueueFromSnapshot(snap);
       scheduleDeferredDispatch();
