@@ -1,0 +1,153 @@
+@import "tailwindcss";
+
+/* ── Glassmorphism Design System ──────────────────────────────────── */
+
+:root {
+  --background: #071018;
+  --foreground: #f8fafc;
+
+  /* Glass surfaces */
+  --glass-bg: rgba(11, 22, 30, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-blur: 20px;
+  --surface-0: #071018;
+  --surface-1: rgba(11, 22, 30, 0.84);
+  --surface-2: rgba(20, 33, 44, 0.68);
+  --surface-3: rgba(31, 46, 61, 0.58);
+
+  /* Agent colors */
+  --agent-claude: #f97316;
+  --agent-gemini: #38bdf8;
+  --agent-droid: #a3e635;
+  --agent-groq: #facc15;
+
+  /* Status colors */
+  --status-ready: #22c55e;
+  --status-thinking: #f59e0b;
+  --status-error: #ef4444;
+  --status-offline: #6b7280;
+
+  /* Muted foregrounds */
+  --muted: rgba(250, 250, 250, 0.5);
+  --muted-foreground: rgba(250, 250, 250, 0.4);
+
+  /* Border */
+  --border: rgba(255, 255, 255, 0.08);
+  --border-hover: rgba(255, 255, 255, 0.15);
+
+  /* Sidebar */
+  --sidebar-width: 64px;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-border-hover: var(--border-hover);
+
+  --color-glass-bg: var(--glass-bg);
+  --color-glass-border: var(--glass-border);
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+
+  --color-agent-claude: var(--agent-claude);
+  --color-agent-gemini: var(--agent-gemini);
+  --color-agent-droid: var(--agent-droid);
+  --color-agent-groq: var(--agent-groq);
+
+  --color-status-ready: var(--status-ready);
+  --color-status-thinking: var(--status-thinking);
+  --color-status-error: var(--status-error);
+  --color-status-offline: var(--status-offline);
+
+  --font-sans: var(--font-jakarta);
+  --font-mono: var(--font-jetbrains);
+}
+
+/* ── Base ─────────────────────────────────────────────────────────── */
+
+body {
+  background:
+    radial-gradient(circle at top left, rgba(249, 115, 22, 0.14), transparent 28%),
+    radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 24%),
+    linear-gradient(180deg, #08111a 0%, #071018 100%);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ── Glass Utilities ──────────────────────────────────────────────── */
+
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+}
+
+.glass-panel {
+  background: var(--surface-1);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--glass-border);
+}
+
+.glass-subtle {
+  background: var(--surface-2);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+}
+
+/* ── Status Pulse ─────────────────────────────────────────────────── */
+
+@keyframes pulse-ready {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5); }
+  50% { box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
+}
+
+@keyframes pulse-thinking {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5); }
+  50% { box-shadow: 0 0 0 4px rgba(245, 158, 11, 0); }
+}
+
+@keyframes pulse-error {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+  50% { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0); }
+}
+
+.pulse-ready { animation: pulse-ready 2s ease-in-out infinite; }
+.pulse-thinking { animation: pulse-thinking 1.5s ease-in-out infinite; }
+.pulse-error { animation: pulse-error 1s ease-in-out infinite; }
+
+/* ── Glow effects ─────────────────────────────────────────────────── */
+
+.glow-claude { box-shadow: 0 0 20px rgba(249, 115, 22, 0.18); }
+.glow-gemini { box-shadow: 0 0 20px rgba(56, 189, 248, 0.18); }
+.glow-droid { box-shadow: 0 0 20px rgba(163, 230, 53, 0.16); }
+.glow-groq { box-shadow: 0 0 20px rgba(250, 204, 21, 0.16); }

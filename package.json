@@ -11,6 +11,10 @@
     "typecheck": "tsc --noEmit",
     "discord": "tsx watch src/discord-index.ts",
     "discord:start": "node dist/discord-index.js",
+    "dashboard:dev": "bash -lc 'cd apps/dashboard && ./node_modules/.bin/next dev'",
+    "dashboard:build": "bash -lc 'cd apps/dashboard && ./node_modules/.bin/next build'",
+    "dashboard:start": "bash -lc 'cd apps/dashboard && ./node_modules/.bin/next start'",
+    "dashboard:lint": "bash -lc 'cd apps/dashboard && ./node_modules/.bin/eslint'",
     "smoke:jobs": "tsx scripts/portable-jobs-smoke.ts",
     "smoke:phase3": "tsx scripts/jobs-phase3-smoke.ts"
   },
