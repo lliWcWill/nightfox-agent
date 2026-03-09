@@ -262,6 +262,9 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
 
   processMessage: (msg) => {
     const { type, payload } = msg;
+    if (type === "system:hello" || type === "system:heartbeat") {
+      return;
+    }
     const ts = getPayloadTimestamp(payload);
     const state = get();
 

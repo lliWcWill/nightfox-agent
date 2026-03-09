@@ -48,6 +48,7 @@ export function useWebSocket(onMessage: (msg: WsMessage) => void) {
     ws.onopen = () => {
       setStatus("connected");
       attemptRef.current = 0;
+      ws.send(JSON.stringify({ type: "subscribe", sinceId: 0 }));
     };
 
     ws.onmessage = (event) => {

@@ -209,8 +209,17 @@ export type DashboardEventType = keyof DashboardEventMap;
 // ── WebSocket message envelope ───────────────────────────────────────
 
 export interface WsMessage<T extends DashboardEventType = DashboardEventType> {
-  type: T;
-  payload: DashboardEventMap[T];
+  type: T | 'system:hello' | 'system:heartbeat';
+  payload: T extends DashboardEventType ? DashboardEventMap[T] : Record<string, unknown>;
+  id?: number;
+  timestamp?: number;
+}
+
+export interface WsClientSubscribeMessage {
+  type: 'subscribe';
+  eventTypes?: DashboardEventType[];
+  jobId?: string;
+  sinceId?: number;
 }
 
 // ── REST API types ───────────────────────────────────────────────────
