@@ -2,7 +2,7 @@ import { ButtonInteraction, ChatInputCommandInteraction, ActionRowBuilder, Butto
 import { jobRunner } from '../../jobs/index.js';
 import { JobEvent, JobSnapshot } from '../../jobs/core/job-types';
 import { synthesizeChildCompletionForParentSession } from '../../jobs/core/job-parent-handoff.js';
-import { autonomyScheduler } from '../../autonomy/autonomy-scheduler.js';
+import { autonomyScheduler, objectiveEventStore, objectiveStore } from '../../autonomy/index.js';
 import { splitDiscordMessage } from '../markdown.js';
 import { conversationActivityGate } from './activity-gate.js';
 import { jobNotificationOutbox } from './job-notification-outbox.js';
@@ -178,7 +178,18 @@ export function attachJobNotifier(client: any) {
     const snap = jobRunner.get(ev.jobId);
 
     if (ev.type === 'job:end' && snap) {
+      const objective = objectiveStore.findByChildJobId(snap.jobId);
       autonomyScheduler.wakeFromJobEnd(snap);
+      if (objective?.state === 'canceled') {
+        objectiveEventStore.append({
+          objectiveId: objective.objectiveId,
+          type: 'objective:delivery-skipped',
+          at: Date.now(),
+          childJobId: snap.jobId,
+          reason: 'objective_canceled_before_delivery',
+        });
+        return;
+      }
       try {
         if (snap.handoff?.mode === 'parent-session') {
           const parent = snap.parentJobId ? jobRunner.get(snap.parentJobId) : undefined;
@@ -188,9 +199,31 @@ export function attachJobNotifier(client: any) {
           });
           if (synthesized.ok) {
             if (await sendAnnouncementToReturnRoute(client, snap, synthesized.content)) {
+              if (objective) {
+                objectiveStore.markDelivery(objective.objectiveId, synthesized.content);
+                objectiveEventStore.append({
+                  objectiveId: objective.objectiveId,
+                  type: 'objective:delivery-sent',
+                  at: Date.now(),
+                  childJobId: snap.jobId,
+                  summary: synthesized.content,
+                  metadata: { route: 'returnRoute' },
+                });
+              }
               return;
             }
             if (await sendAnnouncementToOrigin(client, snap, synthesized.content)) {
+              if (objective) {
+                objectiveStore.markDelivery(objective.objectiveId, synthesized.content);
+                objectiveEventStore.append({
+                  objectiveId: objective.objectiveId,
+                  type: 'objective:delivery-sent',
+                  at: Date.now(),
+                  childJobId: snap.jobId,
+                  summary: synthesized.content,
+                  metadata: { route: 'origin' },
+                });
+              }
               return;
             }
           }
@@ -198,13 +231,45 @@ export function attachJobNotifier(client: any) {
 
         const fallback = renderCompletionAnnouncement(snap);
         if (await sendAnnouncementToReturnRoute(client, snap, fallback)) {
+          if (objective) {
+            objectiveStore.markDelivery(objective.objectiveId, fallback);
+            objectiveEventStore.append({
+              objectiveId: objective.objectiveId,
+              type: 'objective:delivery-sent',
+              at: Date.now(),
+              childJobId: snap.jobId,
+              summary: fallback,
+              metadata: { route: 'returnRoute', kind: 'fallback' },
+            });
+          }
           return;
         }
         if (await sendAnnouncementToOrigin(client, snap, fallback)) {
+          if (objective) {
+            objectiveStore.markDelivery(objective.objectiveId, fallback);
+            objectiveEventStore.append({
+              objectiveId: objective.objectiveId,
+              type: 'objective:delivery-sent',
+              at: Date.now(),
+              childJobId: snap.jobId,
+              summary: fallback,
+              metadata: { route: 'origin', kind: 'fallback' },
+            });
+          }
           return;
         }
       } catch {
         // Fall back to outbox delivery below if direct announce fails.
+      }
+      if (objective) {
+        objectiveEventStore.append({
+          objectiveId: objective.objectiveId,
+          type: 'objective:delivery-ready',
+          at: Date.now(),
+          childJobId: snap.jobId,
+          summary: snap.resultSummary,
+          metadata: { route: snap.returnRoute ?? snap.origin, mode: 'outbox' },
+        });
       }
       jobNotificationOutbox.enqueueFromSnapshot(snap);
       scheduleDeferredDispatch();

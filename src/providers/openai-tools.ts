@@ -24,7 +24,7 @@ import { getApprovalDecision } from '../jobs/core/approval-policy.js';
 import { prepareAgentDeepLoopJob, prepareCodeRabbitReviewJob } from '../jobs/core/job-definitions.js';
 import { config } from '../config.js';
 import { delegatedSessionId } from '../discord/id-mapper.js';
-import { objectiveStore } from '../autonomy/index.js';
+import { objectiveEventStore, objectiveStore } from '../autonomy/index.js';
 import { getCurrentToolChatId, getCurrentToolJobId, getCurrentToolOrigin } from './openai-tool-context.js';
 
 import type { Tool } from '@openai/agents-core';

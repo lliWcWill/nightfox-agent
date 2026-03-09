@@ -1,17 +1,22 @@
 import type { JobSnapshot } from '../jobs/core/job-types.js';
-import { objectiveStore } from './index.js';
+import { objectiveEventStore, objectiveRunnerManager, objectiveStore } from './index.js';
 
 class AutonomyScheduler {
   wakeFromJobEnd(snapshot: JobSnapshot) {
     const objective = objectiveStore.findByChildJobId(snapshot.jobId);
     if (!objective) return null;
-    const nextState = snapshot.state === 'succeeded' ? 'waiting' : snapshot.state === 'canceled' ? 'canceled' : 'failed';
-    return objectiveStore.update(objective.objectiveId, {
-      state: nextState,
-      nextActions: snapshot.state === 'succeeded'
-        ? ['Summarize delegated completion back to the user.']
-        : ['Report delegated failure back to the user.'],
-    });
+    if (objective.state === 'canceled') {
+      objectiveEventStore.append({
+        objectiveId: objective.objectiveId,
+        type: 'objective:delivery-skipped',
+        at: Date.now(),
+        childJobId: snapshot.jobId,
+        reason: 'objective_canceled',
+      });
+      return objective;
+    }
+    objectiveRunnerManager.handleChildCompletion(snapshot);
+    return objective;
   }
 }
 

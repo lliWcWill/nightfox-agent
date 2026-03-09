@@ -7,8 +7,18 @@ import type { JobPlatform, JobReturnRoute } from '../jobs/core/job-types.js';
 export type ObjectiveState = 'active' | 'waiting' | 'completed' | 'canceled' | 'failed';
 export type ObjectiveMode = 'manual' | 'autonomous';
 
+const TERMINAL_STATES = new Set<ObjectiveState>(['completed', 'canceled', 'failed']);
+const LEGAL_TRANSITIONS: Record<ObjectiveState, ReadonlySet<ObjectiveState>> = {
+  active: new Set(['waiting', 'completed', 'canceled', 'failed']),
+  waiting: new Set(['active', 'completed', 'canceled', 'failed']),
+  completed: new Set(),
+  canceled: new Set(),
+  failed: new Set(),
+};
+
 export type ObjectiveRecord = {
   objectiveId: string;
+  revision: number;
   chatId: number;
   platform: JobPlatform;
   channelId: string;
@@ -25,6 +35,9 @@ export type ObjectiveRecord = {
   parentJobId?: string;
   childJobIds: string[];
   returnRoute?: JobReturnRoute;
+  lastChildJobId?: string;
+  lastChildState?: string;
+  lastResultSummary?: string;
   wakeAt?: number;
   budget?: {
     maxAutonomyMinutes?: number;
@@ -77,6 +90,7 @@ export class ObjectiveStore {
     const now = Date.now();
     const record: ObjectiveRecord = {
       objectiveId: crypto.randomUUID(),
+      revision: 0,
       chatId: input.chatId,
       platform: input.platform,
       channelId: input.channelId,
@@ -99,6 +113,46 @@ export class ObjectiveStore {
     return record;
   }
 
+  transition(objectiveId: string, nextState: ObjectiveState, patch: Partial<ObjectiveRecord> = {}) {
+    const current = this.objectives.get(objectiveId);
+    if (!current) return null;
+    if (TERMINAL_STATES.has(current.state)) return current;
+    if (!LEGAL_TRANSITIONS[current.state].has(nextState) && current.state !== nextState) {
+      return current;
+    }
+    const next: ObjectiveRecord = {
+      ...current,
+      ...patch,
+      state: nextState,
+      revision: current.revision + 1,
+      updatedAt: Date.now(),
+    };
+    this.objectives.set(objectiveId, next);
+    this.persist();
+    return next;
+  }
+
+  requestCancel(objectiveId: string, reason = 'user-requested') {
+    return this.transition(objectiveId, 'canceled', {
+      nextActions: ['Do not send completion update; objective was canceled.'],
+      lastChildState: reason,
+    });
+  }
+
+  markDelivery(objectiveId: string, summary: string) {
+    const current = this.objectives.get(objectiveId);
+    if (!current) return null;
+    const next: ObjectiveRecord = {
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: Date.now(),
+      lastResultSummary: summary,
+    };
+    this.objectives.set(objectiveId, next);
+    this.persist();
+    return next;
+  }
+
   get(objectiveId: string) {
     return this.objectives.get(objectiveId);
   }
@@ -110,7 +164,10 @@ export class ObjectiveStore {
   update(objectiveId: string, patch: Partial<ObjectiveRecord>) {
     const current = this.objectives.get(objectiveId);
     if (!current) return null;
-    const next = { ...current, ...patch, updatedAt: Date.now() };
+    if (TERMINAL_STATES.has(current.state) && patch.state && patch.state !== current.state) {
+      return current;
+    }
+    const next = { ...current, ...patch, revision: current.revision + 1, updatedAt: Date.now() };
     this.objectives.set(objectiveId, next);
     this.persist();
     return next;
