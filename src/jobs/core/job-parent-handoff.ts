@@ -22,9 +22,11 @@ function buildParentSessionCompletionPrompt(child: JobSnapshot): string {
   const lines = [
     '[Internal Delegated Completion]',
     'This is runtime-generated internal context from a completed delegated background job.',
-    'Rewrite it as a concise normal assistant update for the user.',
+    'Continue the parent conversation using this delegated result.',
     "Do not mention job ids, lanes, session routing, internal metadata, or system annotations.",
-    'Do not call tools or delegate more work. Only produce the final user-facing update.',
+    'If the user-facing answer is ready, send it now in your normal assistant voice.',
+    'You may use tools if they are strictly necessary to finish the answer correctly.',
+    'Do not delegate more background work from this handoff.',
     '',
     `Status: ${describeTerminalState(child.state)}`,
     `Task Label: ${child.name}`,
@@ -45,9 +47,16 @@ function buildParentSessionCompletionPrompt(child: JobSnapshot): string {
     lines.push('', 'Failure detail:', String(child.error).slice(0, 1200));
   }
 
+  if (!child.resultSummary && child.logs.length) {
+    lines.push('', 'Recent child logs:');
+    for (const entry of child.logs.slice(-6)) {
+      lines.push(`- ${entry.level}: ${entry.message}`);
+    }
+  }
+
   lines.push(
     '',
-    'Instruction: return the message that should be posted back to the user now.',
+    'Instruction: continue from this delegated completion and return the message that should be posted back to the user now.',
   );
   return lines.join('\n');
 }
