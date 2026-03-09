@@ -50,7 +50,16 @@ type PatchOperationResult = {
 
 
 
-function resolveDelegateOrigin(chatId: number | undefined, origin: ReturnType<typeof getCurrentToolOrigin>): { origin?: { channelId: string; userId: string; threadId?: string }; error?: string } {
+function makeStableHeadlessSeed(kind: string, value: string) {
+  const digest = crypto.createHash('sha256').update(`${kind}:${value}`).digest('hex').slice(0, 16);
+  return `headless:${kind}:${digest}`;
+}
+
+function resolveDelegateOrigin(
+  chatId: number | undefined,
+  origin: ReturnType<typeof getCurrentToolOrigin>,
+  stableSeed?: string,
+): { origin?: { channelId: string; userId: string; threadId?: string }; error?: string } {
   if (origin?.channelId && origin?.userId) return { origin };
 
   if (!config.JOB_ALLOW_HEADLESS_ORIGIN) {
@@ -61,7 +70,9 @@ function resolveDelegateOrigin(chatId: number | undefined, origin: ReturnType<ty
   // can still run in headless or non-Discord contexts when explicitly enabled.
   const seed = typeof chatId === 'number'
     ? `chat:${chatId}`
-    : `headless:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
+    : stableSeed
+      ? makeStableHeadlessSeed('delegated-job', stableSeed)
+      : 'headless:system';
 
   const synthetic = { channelId: seed, userId: seed };
   return { origin: synthetic };
@@ -708,43 +719,50 @@ function createDelegateDeepTaskTool() {
       model: z.string().nullable().optional().describe('Optional model override for the deep loop'),
       max_iterations: z.number().nullable().optional().describe('Optional max loop iterations (default 24)'),
     }),
-      execute: async ({ task, model, max_iterations }) => {
-        try {
-          const chatId = getCurrentToolChatId();
-          const parentJobId = getCurrentToolJobId();
-          if (typeof chatId !== 'number') {
-            return '[error] delegate_deep_task unavailable: missing chat context';
-          }
+    execute: async ({ task, model, max_iterations }) => {
+      try {
+        const chatId = getCurrentToolChatId();
+        const parentJobId = getCurrentToolJobId();
         const trimmed = task.trim();
         if (!trimmed) {
           return '[error] delegate_deep_task requires non-empty task';
         }
+        if (typeof chatId !== 'number' && !config.JOB_ALLOW_HEADLESS_ORIGIN) {
+          return '[error] delegate_deep_task unavailable: missing chat context';
+        }
 
-          const childChatId = createDelegatedChildChatId(chatId, trimmed, model ?? 'gpt-5.3-codex-spark');
-          const requestedModel = model ?? 'gpt-5.3-codex-spark';
-          const handler = agentDeepLoopJob({
-            parentChatId: chatId,
-            childChatId,
-            task: trimmed,
-            model: requestedModel,
-            maxIterations:
-              typeof max_iterations === 'number'
-                ? Math.max(1, Math.min(64, Math.floor(max_iterations)))
+        const requestedModel = model ?? 'gpt-5.3-codex-spark';
+        const effectiveParentChatId = typeof chatId === 'number'
+          ? chatId
+          : delegatedSessionId(makeStableHeadlessSeed('parent-chat', `${trimmed}:${requestedModel}:${max_iterations ?? ''}`));
+        const childChatId = createDelegatedChildChatId(effectiveParentChatId, trimmed, requestedModel);
+        const handler = agentDeepLoopJob({
+          parentChatId: effectiveParentChatId,
+          childChatId,
+          task: trimmed,
+          model: requestedModel,
+          maxIterations:
+            typeof max_iterations === 'number'
+              ? Math.max(1, Math.min(64, Math.floor(max_iterations)))
               : undefined,
         });
 
-        const originResolved = resolveDelegateOrigin(chatId, getCurrentToolOrigin());
+        const originResolved = resolveDelegateOrigin(
+          chatId,
+          getCurrentToolOrigin(),
+          `deep-task:${trimmed}:${requestedModel}:${max_iterations ?? ''}`,
+        );
         if (!originResolved.origin) {
           return '[error] delegate_deep_task unavailable: ' + (originResolved.error ?? 'missing origin');
         }
         const origin = originResolved.origin;
 
-          const idempotencyKey = makeIdempotencyKey('agent:autonomous-deep-loop', origin, {
-            chatId,
-            task: trimmed,
-            model: requestedModel,
-            max_iterations: max_iterations ?? null,
-          });
+        const idempotencyKey = makeIdempotencyKey('agent:autonomous-deep-loop', origin, {
+          chatId: typeof chatId === 'number' ? chatId : null,
+          task: trimmed,
+          model: requestedModel,
+          max_iterations: max_iterations ?? null,
+        });
 
         const timeoutMs = 1000 * 60 * 30;
         const jobName = 'agent:autonomous-deep-loop';
@@ -753,24 +771,24 @@ function createDelegateDeepTaskTool() {
           return `[error] ${jobName} requires approval (${decision.reason}). Run via /devops for approval flow.`;
         }
 
-            const jobId = jobRunner.enqueue({
-              name: jobName,
-              lane: 'subagent',
-              origin,
-              handler,
-            timeoutMs,
-            idempotencyKey,
-            parentJobId,
-          });
+        const jobId = jobRunner.enqueue({
+          name: jobName,
+          lane: 'subagent',
+          origin,
+          handler,
+          timeoutMs,
+          idempotencyKey,
+          parentJobId,
+        });
 
-          return JSON.stringify({
-            status: 'queued',
-            jobId,
-            childChatId,
-            model: requestedModel,
-            parentJobId: parentJobId ?? null,
-            timeoutMinutes: 30,
-          });
+        return JSON.stringify({
+          status: 'queued',
+          jobId,
+          childChatId,
+          model: requestedModel,
+          parentJobId: parentJobId ?? null,
+          timeoutMinutes: 30,
+        });
       } catch (err) {
         return `[error] delegate_deep_task failed: ${err instanceof Error ? err.message : String(err)}`;
       }
@@ -801,9 +819,13 @@ function createDelegateCodeRabbitReviewTool(cwd: string) {
         const targets: Array<'committed' | 'uncommitted'> =
           selectedTarget === 'all' ? ['committed', 'uncommitted'] : [selectedTarget];
 
-          const chatId = getCurrentToolChatId();
-          const parentJobId = getCurrentToolJobId();
-          const toolOriginResolved = resolveDelegateOrigin(chatId, getCurrentToolOrigin());
+        const chatId = getCurrentToolChatId();
+        const parentJobId = getCurrentToolJobId();
+        const toolOriginResolved = resolveDelegateOrigin(
+          chatId,
+          getCurrentToolOrigin(),
+          `coderabbit:${repoPath}:${baseRef}:${selectedTarget}:prompt-only`,
+        );
         if (!toolOriginResolved.origin) {
           return '[error] delegate_coderabbit_review unavailable: ' + (toolOriginResolved.error ?? 'missing origin');
         }
@@ -822,13 +844,14 @@ function createDelegateCodeRabbitReviewTool(cwd: string) {
           if (decision.requiresApproval) {
             throw new Error(`${jobName} requires approval (${decision.reason}). Run via /devops for approval flow.`);
           }
-              return jobRunner.enqueue({
-                name: jobName,
-                lane: 'review',
-                origin: toolOrigin,
-                handler: async (ctx) =>
+          return jobRunner.enqueue({
+            name: jobName,
+            lane: 'review',
+            origin: toolOrigin,
+            handler: async (ctx) =>
               coderabbitReview({
                 id: ctx.jobId,
+                name: jobName,
                 payload: {
                   repoPath,
                   baseRef,
@@ -837,22 +860,22 @@ function createDelegateCodeRabbitReviewTool(cwd: string) {
                 },
                 state: 'running',
                 createdAt: Date.now(),
-                } as any),
-              timeoutMs,
-              idempotencyKey,
-              parentJobId,
-            });
+              }),
+            timeoutMs,
+            idempotencyKey,
+            parentJobId,
           });
+        });
 
         return JSON.stringify({
           status: 'queued',
           mode: 'prompt-only',
           baseRef,
-            target: selectedTarget,
-            repoPath,
-            jobIds,
-            parentJobId: parentJobId ?? null,
-          });
+          target: selectedTarget,
+          repoPath,
+          jobIds,
+          parentJobId: parentJobId ?? null,
+        });
       } catch (err) {
         return `[error] delegate_coderabbit_review failed: ${err instanceof Error ? err.message : String(err)}`;
       }
@@ -869,16 +892,16 @@ function createDelegateCodexHighReviewTool() {
       task: z.string().describe('What should be reviewed or validated'),
       max_iterations: z.number().nullable().optional().describe('Optional max loop iterations (default 24)'),
     }),
-      execute: async ({ task, max_iterations }) => {
-        try {
-          const chatId = getCurrentToolChatId();
-          const parentJobId = getCurrentToolJobId();
-          if (typeof chatId !== 'number') {
-            return '[error] delegate_codex_high_review unavailable: missing chat context';
-          }
+    execute: async ({ task, max_iterations }) => {
+      try {
+        const chatId = getCurrentToolChatId();
+        const parentJobId = getCurrentToolJobId();
         const trimmed = task.trim();
         if (!trimmed) {
           return '[error] delegate_codex_high_review requires non-empty task';
+        }
+        if (typeof chatId !== 'number' && !config.JOB_ALLOW_HEADLESS_ORIGIN) {
+          return '[error] delegate_codex_high_review unavailable: missing chat context';
         }
 
         const reviewTask = [
@@ -887,26 +910,33 @@ function createDelegateCodexHighReviewTool() {
           `Task: ${trimmed}`,
         ].join('\n');
 
-          const childChatId = createDelegatedChildChatId(chatId, reviewTask, 'gpt-5.4');
-          const handler = agentDeepLoopJob({
-            parentChatId: chatId,
-            childChatId,
-            task: reviewTask,
-            model: 'gpt-5.4',
-            maxIterations:
+        const effectiveParentChatId = typeof chatId === 'number'
+          ? chatId
+          : delegatedSessionId(makeStableHeadlessSeed('parent-chat', `${reviewTask}:${max_iterations ?? ''}`));
+        const childChatId = createDelegatedChildChatId(effectiveParentChatId, reviewTask, 'gpt-5.4');
+        const handler = agentDeepLoopJob({
+          parentChatId: effectiveParentChatId,
+          childChatId,
+          task: reviewTask,
+          model: 'gpt-5.4',
+          maxIterations:
             typeof max_iterations === 'number'
               ? Math.max(1, Math.min(64, Math.floor(max_iterations)))
               : undefined,
         });
 
-        const originResolved = resolveDelegateOrigin(chatId, getCurrentToolOrigin());
+        const originResolved = resolveDelegateOrigin(
+          chatId,
+          getCurrentToolOrigin(),
+          `codex-high-review:${reviewTask}:${max_iterations ?? ''}`,
+        );
         if (!originResolved.origin) {
           return '[error] delegate_codex_high_review unavailable: ' + (originResolved.error ?? 'missing origin');
         }
         const origin = originResolved.origin;
 
         const idempotencyKey = makeIdempotencyKey('agent:codex-high-review', origin, {
-          chatId,
+          chatId: typeof chatId === 'number' ? chatId : null,
           task: reviewTask,
           model: 'gpt-5.4',
           max_iterations: max_iterations ?? null,
@@ -919,23 +949,23 @@ function createDelegateCodexHighReviewTool() {
           return `[error] ${jobName} requires approval (${decision.reason}). Run via /devops for approval flow.`;
         }
 
-            const jobId = jobRunner.enqueue({
-              name: jobName,
-              lane: 'review',
-              origin,
-              handler,
-            timeoutMs,
-            idempotencyKey,
-            parentJobId,
-          });
+        const jobId = jobRunner.enqueue({
+          name: jobName,
+          lane: 'review',
+          origin,
+          handler,
+          timeoutMs,
+          idempotencyKey,
+          parentJobId,
+        });
 
-            return JSON.stringify({
-              status: 'queued',
-              jobId,
-              childChatId,
-              model: 'gpt-5.4',
-              parentJobId: parentJobId ?? null,
-            });
+        return JSON.stringify({
+          status: 'queued',
+          jobId,
+          childChatId,
+          model: 'gpt-5.4',
+          parentJobId: parentJobId ?? null,
+        });
       } catch (err) {
         return `[error] delegate_codex_high_review failed: ${err instanceof Error ? err.message : String(err)}`;
       }

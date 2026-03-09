@@ -89,17 +89,17 @@ export async function devopsCommand(interaction: ChatInputCommandInteraction) {
       const durationMs = (j.endedAt ?? Date.now()) - (j.startedAt ?? j.createdAt);
       const recentLogs = j.logs.slice(-8).map((l) => `- ${new Date(l.at).toISOString()} [${l.level}] ${l.message.slice(0, 180)}`);
       const failedOutbox = jobNotificationOutbox.getFailed();
-        await interaction.reply({
-          content: [
-            `**Job \`${j.jobId}\`**`,
-            `- **Name**: ${j.name}`,
-            `- **State**: ${j.state}`,
-            `- **Parent Job**: ${j.parentJobId ?? 'none'}`,
-            `- **Root Job**: ${j.rootJobId}`,
-            `- **Child Jobs**: ${j.childJobIds.length}`,
-            `- **Duration**: ${Math.round(durationMs / 1000)}s`,
-            `- **Exit Code**: ${j.exitCode ?? 'n/a'}`,
-            j.error ? `- **Error**: \`${j.error.slice(0, 300)}\`` : null,
+      await interaction.reply({
+        content: [
+          `**Job \`${j.jobId}\`**`,
+          `- **Name**: ${j.name}`,
+          `- **State**: ${j.state}`,
+          `- **Parent Job**: ${j.parentJobId ?? 'none'}`,
+          `- **Root Job**: ${j.rootJobId}`,
+          `- **Child Jobs**: ${j.childJobIds.length}`,
+          `- **Duration**: ${Math.round(durationMs / 1000)}s`,
+          `- **Exit Code**: ${j.exitCode ?? 'n/a'}`,
+          j.error ? `- **Error**: \`${j.error.slice(0, 300)}\`` : null,
           failedOutbox.length ? `- **Notification Outbox Failed**: ${failedOutbox.length}` : null,
           recentLogs.length ? `\n**Recent Logs**\n${recentLogs.join('\n')}` : null,
         ].filter(Boolean).join('\n'),
@@ -113,12 +113,12 @@ export async function devopsCommand(interaction: ChatInputCommandInteraction) {
       await interaction.reply({ content: 'No recent jobs found.', flags: 64 });
       return;
     }
-      const lines = recent.map((j) => {
-        const durationMs = (j.endedAt ?? Date.now()) - (j.startedAt ?? j.createdAt);
-        const lineage = j.parentJobId ? ` • parent:\`${j.parentJobId.slice(0, 8)}\`` : '';
-        const children = j.childJobIds.length ? ` • children:${j.childJobIds.length}` : '';
-        return `- \`${j.jobId}\` • **${j.name}** • ${j.state} • ${Math.round(durationMs / 1000)}s${lineage}${children}`;
-      });
+    const lines = recent.map((j) => {
+      const durationMs = (j.endedAt ?? Date.now()) - (j.startedAt ?? j.createdAt);
+      const lineage = j.parentJobId ? ` • parent:\`${j.parentJobId.slice(0, 8)}\`` : '';
+      const children = j.childJobIds.length ? ` • children:${j.childJobIds.length}` : '';
+      return `- \`${j.jobId}\` • **${j.name}** • ${j.state} • ${Math.round(durationMs / 1000)}s${lineage}${children}`;
+    });
     const m = jobRunner.getMetrics();
     const failedOutbox = jobNotificationOutbox.getFailed();
     const degradedFlags: string[] = [];

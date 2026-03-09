@@ -19,6 +19,17 @@ export type CodeRabbitResult = {
   command: string;
 };
 
+export type CodeRabbitJobResult = CodeRabbitResult & {
+  resultSummary: string;
+  artifacts: string[];
+  verdict: 'clean' | 'issues' | 'failed';
+  counts: {
+    critical: number;
+    risks: number;
+    fixes: number;
+  };
+};
+
 type CodeRabbitStructuredResult = {
   verdict: 'clean' | 'issues' | 'failed';
   criticalIssues: string[];
@@ -148,7 +159,7 @@ async function writeReviewArtifacts(repoPath: string, jobId: string, raw: CodeRa
   return { resultPath, summaryPath };
 }
 
-export async function coderabbitReview(job: JobRecord<CodeRabbitPayload, CodeRabbitResult>) {
+export async function coderabbitReview(job: JobRecord<CodeRabbitPayload, CodeRabbitJobResult>) {
   const { repoPath, baseRef, target, promptOnly } = job.payload;
 
   const cmd = await resolveCodeRabbitBinary();
@@ -174,5 +185,5 @@ export async function coderabbitReview(job: JobRecord<CodeRabbitPayload, CodeRab
       risks: parsed.risks.length,
       fixes: parsed.exactFixes.length,
     },
-  } as any;
+  };
 }
