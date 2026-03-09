@@ -195,8 +195,8 @@ npm run dashboard:dev
 By default it connects to the Nightfox dashboard backend on:
 
 ```bash
-http://localhost:3011
-ws://localhost:3011/ws
+http://localhost:3001
+ws://localhost:3001/ws
 ```
 
 ---

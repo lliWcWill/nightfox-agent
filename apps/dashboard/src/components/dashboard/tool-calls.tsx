@@ -41,7 +41,7 @@ function ElapsedTimer({ startedAt }: { startedAt: number }) {
       setNow(Date.now());
     }, 100);
     return () => clearInterval(interval);
-  }, [startedAt]);
+  }, []);
 
   const elapsed = Math.max(0, now - startedAt);
 

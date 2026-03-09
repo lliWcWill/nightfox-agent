@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { GlassPanel } from "@/components/glass/glass-panel";
 import { GlassBadge } from "@/components/glass/glass-badge";
@@ -12,6 +13,7 @@ import {
   Loader2,
   CheckCircle2,
   Archive,
+  TriangleAlert,
   ArrowUp,
   ArrowRight,
   ArrowDown,
@@ -32,18 +34,22 @@ const COLUMNS: {
   { id: "archived", label: "Archived", icon: Archive, accentVar: "var(--muted-foreground)" },
 ];
 
-const PRIORITY_CONFIG = {
+const PRIORITY_CONFIG: Record<
+  NonNullable<KanbanTask["priority"]>,
+  { icon: React.ElementType; color: string; label: string }
+> = {
+  critical: { icon: TriangleAlert, color: "var(--status-error)", label: "Crit" },
   high: { icon: ArrowUp, color: "var(--status-error)", label: "High" },
   medium: { icon: ArrowRight, color: "var(--status-thinking)", label: "Med" },
   low: { icon: ArrowDown, color: "var(--muted-foreground)", label: "Low" },
-} as const;
+};
 
 const FILTER_TABS: { id: AgentId | "all"; label: string }[] = [
   { id: "all", label: "All" },
-  { id: "claude", label: "Claude" },
-  { id: "gemini", label: "Gemini" },
-  { id: "droid", label: "Droid" },
-  { id: "groq", label: "Groq" },
+  ...Object.entries(AGENTS).map(([id, agent]) => ({
+    id: id as AgentId,
+    label: agent.label,
+  })),
 ];
 
 // ── Task Card ────────────────────────────────────────────────────────
@@ -191,16 +197,26 @@ export function KanbanBoard() {
   const setKanbanFilter = useDashboardStore((s) => s.setKanbanFilter);
 
   // Apply agent filter
-  const filtered =
-    kanbanFilter === "all"
-      ? kanbanTasks
-      : kanbanTasks.filter((t) => t.agent === kanbanFilter);
+  const filtered = useMemo(
+    () =>
+      kanbanFilter === "all"
+        ? kanbanTasks
+        : kanbanTasks.filter((t) => t.agent === kanbanFilter),
+    [kanbanFilter, kanbanTasks]
+  );
+  const tasksByColumn = useMemo(() => {
+    const grouped = Object.fromEntries(
+      COLUMNS.map((column) => [column.id, [] as KanbanTask[]])
+    ) as Record<KanbanColumn, KanbanTask[]>;
 
-  // Group by column, sorted by updatedAt desc
-  const byColumn = (col: KanbanColumn) =>
-    filtered
-      .filter((t) => t.column === col)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+    for (const task of filtered) {
+      grouped[task.column].push(task);
+    }
+    for (const column of COLUMNS) {
+      grouped[column.id].sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+    return grouped;
+  }, [filtered]);
 
   return (
     <GlassPanel noPadding className="flex h-full flex-col">
@@ -239,13 +255,13 @@ export function KanbanBoard() {
 
       {/* Columns */}
       <div className="grid min-h-0 flex-1 grid-cols-4 gap-3 p-3">
-        {COLUMNS.map((col) => (
-          <KanbanColumnView
-            key={col.id}
-            column={col}
-            tasks={byColumn(col.id)}
-          />
-        ))}
+          {COLUMNS.map((col) => (
+            <KanbanColumnView
+              key={col.id}
+              column={col}
+              tasks={tasksByColumn[col.id]}
+            />
+          ))}
       </div>
 
       {/* Footer */}

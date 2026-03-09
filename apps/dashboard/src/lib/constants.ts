@@ -58,13 +58,7 @@ export const EVENT_COLORS: Record<string, string> = {
   "voice:close": "var(--agent-gemini)",
   "voice:text": "var(--agent-gemini)",
   "voice:tool_call": "var(--agent-gemini)",
-  "voice:tool_result": "var(--agent-gemini)",
   "voice:interrupted": "var(--agent-gemini)",
-  "voice:speaking": "var(--agent-gemini)",
-  "voice:listening": "var(--agent-gemini)",
-  "groq:start": "var(--agent-groq)",
-  "groq:complete": "var(--agent-groq)",
-  "groq:error": "var(--status-error)",
   "droid:start": "var(--agent-droid)",
   "droid:stream": "var(--agent-droid)",
   "droid:complete": "var(--agent-droid)",
@@ -82,11 +76,20 @@ export const EVENT_COLORS: Record<string, string> = {
   "job:log": "var(--muted)",
   "job:origin": "var(--muted)",
   "job:idempotency": "var(--muted)",
-  "task:create": "var(--agent-claude)",
-  "task:update": "var(--agent-claude)",
 };
 
-export const WS_URL =
-  process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:3011/ws";
-export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:3011";
+function getDashboardUrl(name: "NEXT_PUBLIC_WS_URL" | "NEXT_PUBLIC_API_URL", fallback: string) {
+  const value = process.env[name]?.trim();
+  if (value) {
+    return value;
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      `${name} must be set for production dashboard builds. Copy apps/dashboard/.env.example and provide the public Nightfox dashboard endpoint.`
+    );
+  }
+  return fallback;
+}
+
+export const WS_URL = getDashboardUrl("NEXT_PUBLIC_WS_URL", "ws://localhost:3001/ws");
+export const API_URL = getDashboardUrl("NEXT_PUBLIC_API_URL", "http://localhost:3001");

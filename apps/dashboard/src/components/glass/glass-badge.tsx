@@ -9,6 +9,15 @@ interface GlassBadgeProps {
 }
 
 export function GlassBadge({ children, color, className }: GlassBadgeProps) {
+  const style = color
+    ? {
+        color,
+        borderColor: color.includes("var(")
+          ? `color-mix(in srgb, ${color} 20%, transparent)`
+          : `${color}33`,
+      }
+    : undefined;
+
   return (
     <span
       className={cn(
@@ -17,7 +26,7 @@ export function GlassBadge({ children, color, className }: GlassBadgeProps) {
         "glass-subtle",
         className
       )}
-      style={color ? { color, borderColor: `${color}33` } : undefined}
+      style={style}
     >
       {children}
     </span>

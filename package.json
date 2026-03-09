@@ -4,6 +4,9 @@
   "description": "Telegram bot that bridges messages to Claude Code with full agent capabilities",
   "type": "module",
   "main": "dist/index.js",
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
@@ -11,10 +14,10 @@
     "typecheck": "tsc --noEmit",
     "discord": "tsx watch src/discord-index.ts",
     "discord:start": "node dist/discord-index.js",
-    "dashboard:dev": "bash -lc 'cd apps/dashboard && ./node_modules/.bin/next dev'",
-    "dashboard:build": "bash -lc 'cd apps/dashboard && ./node_modules/.bin/next build'",
-    "dashboard:start": "bash -lc 'cd apps/dashboard && ./node_modules/.bin/next start'",
-    "dashboard:lint": "bash -lc 'cd apps/dashboard && ./node_modules/.bin/eslint'",
+    "dashboard:dev": "node scripts/run-dashboard-workspace.mjs dev",
+    "dashboard:build": "node scripts/run-dashboard-workspace.mjs build",
+    "dashboard:start": "node scripts/run-dashboard-workspace.mjs start",
+    "dashboard:lint": "node scripts/run-dashboard-workspace.mjs lint",
     "smoke:jobs": "tsx scripts/portable-jobs-smoke.ts",
     "smoke:phase3": "tsx scripts/jobs-phase3-smoke.ts"
   },

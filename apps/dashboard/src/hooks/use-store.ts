@@ -1,7 +1,6 @@
 "use client";
 
 import { create } from "zustand";
-import { VALID_KANBAN_COLUMNS, VALID_AGENT_IDS } from "@/lib/constants";
 import type {
   AgentId,
   AgentStatusInfo,
@@ -9,7 +8,6 @@ import type {
   DashboardJobInfo,
   DashboardJobMetrics,
   FleetSummary,
-  KanbanColumn,
   KanbanTask,
   QueueInfo,
   ToolCallInfo,
@@ -59,9 +57,6 @@ interface DashboardState {
 
   kanbanTasks: KanbanTask[];
   kanbanFilter: AgentId | "all";
-  addTask: (task: KanbanTask) => void;
-  updateTask: (id: string, patch: Partial<KanbanTask>) => void;
-  moveTask: (id: string, column: KanbanColumn) => void;
   setKanbanFilter: (filter: AgentId | "all") => void;
   setKanbanTasks: (tasks: KanbanTask[]) => void;
 
@@ -75,12 +70,28 @@ interface DashboardState {
   processMessage: (msg: WsMessage) => void;
 }
 
+function getPayloadTimestamp(payload: Record<string, unknown>): number {
+  for (const key of ["timestamp", "at"] as const) {
+    const value = payload[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return Date.now();
+}
+
 export const useDashboardStore = create<DashboardState>()((set, get) => ({
   agents: {
     claude: { id: "claude", status: "offline" },
     gemini: { id: "gemini", status: "offline" },
     droid: { id: "droid", status: "offline" },
-    groq: { id: "groq", status: "ready" },
+    groq: { id: "groq", status: "offline" },
   },
 
   updateAgent: (id, patch) =>
@@ -141,22 +152,6 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
 
   kanbanTasks: [],
   kanbanFilter: "all",
-  addTask: (task) =>
-    set((state) => ({
-      kanbanTasks: [task, ...state.kanbanTasks],
-    })),
-  updateTask: (id, patch) =>
-    set((state) => ({
-      kanbanTasks: state.kanbanTasks.map((task) =>
-        task.id === id ? { ...task, ...patch, updatedAt: Date.now() } : task
-      ),
-    })),
-  moveTask: (id, column) =>
-    set((state) => ({
-      kanbanTasks: state.kanbanTasks.map((task) =>
-        task.id === id ? { ...task, column, updatedAt: Date.now() } : task
-      ),
-    })),
   setKanbanFilter: (filter) => set({ kanbanFilter: filter }),
   setKanbanTasks: (tasks) => set({ kanbanTasks: tasks }),
 
@@ -169,7 +164,7 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
 
   processMessage: (msg) => {
     const { type, payload } = msg;
-    const ts = (payload.timestamp as number) || (payload.at as number) || Date.now();
+    const ts = getPayloadTimestamp(payload);
     const state = get();
 
     state.addEvent({
@@ -238,22 +233,6 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
         });
         break;
 
-      case "voice:speaking":
-        state.updateAgent("gemini", {
-          status: "thinking",
-          currentActivity: "Speaking...",
-          lastActivity: ts,
-        });
-        break;
-
-      case "voice:listening":
-        state.updateAgent("gemini", {
-          status: "ready",
-          currentActivity: "Listening",
-          lastActivity: ts,
-        });
-        break;
-
       case "voice:tool_call":
         state.updateAgent("gemini", {
           status: "thinking",
@@ -272,38 +251,10 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
         });
         break;
 
-      case "voice:tool_result":
-        state.completeToolCall((payload.chatId as number) ?? "voice");
-        break;
-
       case "voice:interrupted":
         state.updateAgent("gemini", {
           status: "ready",
           currentActivity: "Interrupted",
-          lastActivity: ts,
-        });
-        break;
-
-      case "groq:start":
-        state.updateAgent("groq", {
-          status: "thinking",
-          currentActivity: "Transcribing...",
-          lastActivity: ts,
-        });
-        break;
-
-      case "groq:complete":
-        state.updateAgent("groq", {
-          status: "ready",
-          currentActivity: (payload.text as string)?.slice(0, 80),
-          lastActivity: ts,
-        });
-        break;
-
-      case "groq:error":
-        state.updateAgent("groq", {
-          status: "error",
-          currentActivity: (payload.error as string)?.slice(0, 80),
           lastActivity: ts,
         });
         break;
@@ -365,7 +316,7 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
           name: payload.name as string,
           lane: payload.lane as DashboardJobInfo["lane"],
           state: "queued",
-          createdAt: (payload.at as number) || ts,
+          createdAt: ts,
           parentJobId: payload.parentJobId as string | undefined,
           rootJobId: (payload.rootJobId as string) || (payload.jobId as string),
         });
@@ -443,46 +394,6 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
               : existing?.error || `Job ${payload.state}`,
           origin: existing?.origin,
         });
-        break;
-      }
-
-      case "task:create": {
-        const col = String(payload.column || "");
-        const agent = String(payload.agent || "");
-        state.addTask({
-          id: (payload.id as string) || `task_${ts}_${Math.random().toString(36).slice(2, 6)}`,
-          title: (payload.title as string) || "Untitled",
-          description: payload.description as string | undefined,
-          column: VALID_KANBAN_COLUMNS.includes(col as KanbanColumn) ? (col as KanbanColumn) : "todo",
-          agent: VALID_AGENT_IDS.includes(agent as AgentId) ? (agent as AgentId) : "claude",
-          createdAt: ts,
-          updatedAt: ts,
-          priority:
-            (["low", "medium", "high"] as const).includes(payload.priority as "low")
-              ? (payload.priority as KanbanTask["priority"])
-              : undefined,
-          labels: Array.isArray(payload.labels) ? (payload.labels as string[]) : undefined,
-        });
-        break;
-      }
-
-      case "task:update": {
-        if (payload.id) {
-          const patch: Partial<KanbanTask> = {};
-          if (payload.title) patch.title = payload.title as string;
-          if (payload.description !== undefined) patch.description = payload.description as string;
-          if (payload.column) {
-            const col = String(payload.column);
-            if (VALID_KANBAN_COLUMNS.includes(col as KanbanColumn)) patch.column = col as KanbanColumn;
-          }
-          if (payload.priority) {
-            if ((["low", "medium", "high"] as const).includes(payload.priority as "low")) {
-              patch.priority = payload.priority as KanbanTask["priority"];
-            }
-          }
-          if (Array.isArray(payload.labels)) patch.labels = payload.labels as string[];
-          state.updateTask(payload.id as string, patch);
-        }
         break;
       }
     }

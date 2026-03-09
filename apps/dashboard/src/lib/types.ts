@@ -16,6 +16,18 @@ export interface WsMessage {
   payload: Record<string, unknown>;
 }
 
+export interface DashboardTask {
+  id: string;
+  title: string;
+  description: string;
+  status: "todo" | "in_progress" | "done" | "archived";
+  assignedAgent?: AgentId;
+  priority: "low" | "medium" | "high" | "critical";
+  linkedSession?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface QueueInfo {
   chatId: number;
   depth: number;
@@ -115,6 +127,6 @@ export interface KanbanTask {
   agent: AgentId;
   createdAt: number;
   updatedAt: number;
-  priority?: "low" | "medium" | "high";
+  priority?: "low" | "medium" | "high" | "critical";
   labels?: string[];
 }

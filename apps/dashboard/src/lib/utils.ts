@@ -29,6 +29,12 @@ export function truncate(str: string, max: number): string {
 
 export function eventDescription(ev: DashboardEvent): string {
   const p = ev.payload;
+  const durationMs =
+    typeof p.durationMs === "number" && Number.isFinite(p.durationMs)
+      ? p.durationMs
+      : 0;
+  const toolsUsed = Array.isArray(p.toolsUsed) ? p.toolsUsed.length : 0;
+
   switch (ev.type) {
     case "agent:start":
       return `Query started — ${truncate(String(p.prompt || ""), 100)}`;
@@ -37,7 +43,7 @@ export function eventDescription(ev: DashboardEvent): string {
     case "agent:tool_end":
       return `Tool completed`;
     case "agent:complete":
-      return `Completed (${((p.durationMs as number) / 1000).toFixed(1)}s) — ${(p.toolsUsed as string[])?.length || 0} tools`;
+      return `Completed (${(durationMs / 1000).toFixed(1)}s) — ${toolsUsed} tools`;
     case "agent:error":
       return `Error: ${truncate(String(p.error || ""), 120)}`;
     case "voice:open":
@@ -64,32 +70,28 @@ export function eventDescription(ev: DashboardEvent): string {
       return `Transcription error: ${truncate(String(p.error || ""), 100)}`;
     case "droid:start":
       return `Droid started — ${truncate(String(p.prompt || ""), 100)}`;
-      case "droid:complete":
-        return `Droid finished (${((p.durationMs as number) / 1000).toFixed(1)}s)`;
-      case "queue:enqueue":
-        return `Queued chat ${p.chatId} (depth: ${p.queueDepth})`;
-      case "queue:dequeue":
-        return `Dequeued chat ${p.chatId}`;
-      case "queue:processing":
-        return (p.isProcessing as boolean)
-          ? `Processing chat ${p.chatId}`
-          : `Chat ${p.chatId} is idle`;
-      case "job:queued":
-        return `Job queued — ${p.name} [${p.lane}]`;
-      case "job:start":
-        return `Job started — ${p.jobId}`;
-      case "job:progress":
-        return truncate(String(p.message || "Job progress"), 120);
-      case "job:result":
-        return truncate(String(p.summary || "Job produced a result"), 120);
-      case "job:end":
-        return `Job ${p.state} — ${truncate(String(p.jobId || ""), 18)}`;
-      case "job:log":
-        return truncate(String(p.message || "Job log"), 120);
-      case "task:create":
-        return `Task created: ${truncate(String(p.title || ""), 80)}`;
-      case "task:update":
-        return `Task updated: ${truncate(String(p.title || p.id || ""), 80)}`;
+    case "droid:complete":
+      return `Droid finished (${(durationMs / 1000).toFixed(1)}s)`;
+    case "queue:enqueue":
+      return `Queued chat ${p.chatId} (depth: ${p.queueDepth})`;
+    case "queue:dequeue":
+      return `Dequeued chat ${p.chatId}`;
+    case "queue:processing":
+      return (p.isProcessing as boolean)
+        ? `Processing chat ${p.chatId}`
+        : `Chat ${p.chatId} is idle`;
+    case "job:queued":
+      return `Job queued — ${p.name} [${p.lane}]`;
+    case "job:start":
+      return `Job started — ${p.jobId}`;
+    case "job:progress":
+      return truncate(String(p.message || "Job progress"), 120);
+    case "job:result":
+      return truncate(String(p.summary || "Job produced a result"), 120);
+    case "job:end":
+      return `Job ${p.state} — ${truncate(String(p.jobId || ""), 18)}`;
+    case "job:log":
+      return truncate(String(p.message || "Job log"), 120);
     default:
       return ev.type;
   }

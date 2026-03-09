@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { GlassPanel } from "@/components/glass/glass-panel";
@@ -241,14 +241,19 @@ export function ActionLog({ compact = false }: { compact?: boolean }) {
 
   const parentRef = useRef<HTMLDivElement>(null);
 
-  const filtered = eventFilter
-    ? events.filter(
-        (e) =>
-          e.type.includes(eventFilter) ||
-          JSON.stringify(e.payload)
-            .toLowerCase()
-            .includes(eventFilter.toLowerCase())
-      )
+  const normalizedFilter = eventFilter.trim().toLowerCase();
+  const searchableEvents = useMemo(
+    () =>
+      events.map((event) => ({
+        event,
+        searchText: `${event.type} ${eventDescription(event)} ${JSON.stringify(event.payload)}`.toLowerCase(),
+      })),
+    [events]
+  );
+  const filtered = normalizedFilter
+    ? searchableEvents
+        .filter(({ searchText }) => searchText.includes(normalizedFilter))
+        .map(({ event }) => event)
     : events;
 
   const virtualizer = useVirtualizer({

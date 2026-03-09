@@ -9,6 +9,18 @@ const MAX_RECONNECT_DELAY = 30000;
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
+function isWsMessage(value: unknown): value is WsMessage {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as { type?: unknown; payload?: unknown };
+  return (
+    typeof candidate.type === "string" &&
+    typeof candidate.payload === "object" &&
+    candidate.payload !== null
+  );
+}
+
 export function useWebSocket(onMessage: (msg: WsMessage) => void) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -39,9 +51,14 @@ export function useWebSocket(onMessage: (msg: WsMessage) => void) {
     };
 
     ws.onmessage = (event) => {
+      if (typeof event.data !== "string") {
+        return;
+      }
       try {
-        const msg = JSON.parse(event.data) as WsMessage;
-        onMessageRef.current(msg);
+        const parsed = JSON.parse(event.data) as unknown;
+        if (isWsMessage(parsed)) {
+          onMessageRef.current(parsed);
+        }
       } catch {
         // ignore malformed messages
       }
