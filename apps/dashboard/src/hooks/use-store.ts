@@ -59,10 +59,17 @@ interface ToolCallCompletion {
 }
 
 function findToolCallIndex(toolCalls: ToolCallInfo[], completion: ToolCallCompletion): number {
+  let fallbackIndex = -1;
+
   if (completion.callId) {
     for (let i = toolCalls.length - 1; i >= 0; i -= 1) {
       if (toolCalls[i]?.callId === completion.callId) {
-        return i;
+        if (toolCalls[i]?.status === "running") {
+          return i;
+        }
+        if (fallbackIndex === -1) {
+          fallbackIndex = i;
+        }
       }
     }
   }
@@ -84,9 +91,13 @@ function findToolCallIndex(toolCalls: ToolCallInfo[], completion: ToolCallComple
     if (toolCall.status === "running") {
       return i;
     }
+
+    if (fallbackIndex === -1) {
+      fallbackIndex = i;
+    }
   }
 
-  return -1;
+  return fallbackIndex;
 }
 
 interface DashboardState {
@@ -340,14 +351,15 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
         });
         break;
 
-        case "voice:tool_call":
+        case "voice:tool_call": {
+          const voiceToolId = `vtool_${ts}_${Math.random().toString(36).slice(2, 6)}`;
           state.updateAgent("gemini", {
             status: "thinking",
             currentActivity: `Tool: ${payload.toolName}`,
             lastActivity: ts,
           });
           state.addToolCall({
-            id: `vtool_${ts}_${Math.random().toString(36).slice(2, 6)}`,
+            id: voiceToolId,
             chatId: (payload.chatId as number) ?? "voice",
             toolName: payload.toolName as string,
             callId: payload.callId as string | undefined,
@@ -357,7 +369,18 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
             status: "running",
             startedAt: ts,
           });
+          // Voice tool calls complete immediately (fire-and-forget from Gemini Live)
+          // — auto-complete after a short synthetic delay so the UI shows the call then resolves.
+          state.completeToolCall({
+            chatId: (payload.chatId as number) ?? "voice",
+            toolName: payload.toolName as string,
+            callId: payload.callId as string | undefined,
+            output: (payload.result as Record<string, unknown>) ?? undefined,
+            status: "completed",
+            completedAt: ts + 1,
+          });
           break;
+        }
 
       case "voice:interrupted":
         state.updateAgent("gemini", {
@@ -428,6 +451,10 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
           parentJobId: payload.parentJobId as string | undefined,
           rootJobId: (payload.rootJobId as string) || (payload.jobId as string),
         });
+        if (state.jobMetrics) {
+          const m = state.jobMetrics;
+          set({ jobMetrics: { ...m, totalQueued: m.totalQueued + 1, queueDepth: m.queueDepth + 1, peakQueueDepth: Math.max(m.peakQueueDepth, m.queueDepth + 1) } });
+        }
         break;
 
       case "job:start": {
@@ -446,6 +473,10 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
           error: existing?.error,
           origin: existing?.origin,
         });
+        if (state.jobMetrics) {
+          const m = state.jobMetrics;
+          set({ jobMetrics: { ...m, totalStarted: m.totalStarted + 1, queueDepth: Math.max(0, m.queueDepth - 1), running: true } });
+        }
         break;
       }
 
@@ -484,11 +515,12 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
 
       case "job:end": {
         const existing = state.jobs.find((job) => job.jobId === payload.jobId);
+        const endState = payload.state as string;
         state.upsertJob({
           jobId: payload.jobId as string,
           name: existing?.name || "Job",
           lane: existing?.lane || "main",
-          state: payload.state as DashboardJobInfo["state"],
+          state: endState as DashboardJobInfo["state"],
           createdAt: existing?.createdAt || ts,
           startedAt: existing?.startedAt,
           endedAt: ts,
@@ -497,11 +529,20 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
           progress: existing?.progress,
           resultSummary: existing?.resultSummary,
           error:
-            (payload.state as string) === "succeeded"
+            endState === "succeeded"
               ? undefined
-              : existing?.error || `Job ${payload.state}`,
+              : existing?.error || `Job ${endState}`,
           origin: existing?.origin,
         });
+        if (state.jobMetrics) {
+          const m = state.jobMetrics;
+          const patch: Partial<DashboardJobMetrics> = { totalEnded: m.totalEnded + 1 };
+          if (endState === "succeeded") patch.totalSucceeded = m.totalSucceeded + 1;
+          else if (endState === "failed") patch.totalFailed = m.totalFailed + 1;
+          else if (endState === "canceled") patch.totalCanceled = m.totalCanceled + 1;
+          else if (endState === "timeout") patch.totalTimeout = m.totalTimeout + 1;
+          set({ jobMetrics: { ...m, ...patch } });
+        }
         break;
       }
     }

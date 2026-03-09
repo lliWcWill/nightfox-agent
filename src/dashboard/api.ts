@@ -4,7 +4,7 @@ import { getCachedUsage } from '../claude/agent.js';
 import { config } from '../config.js';
 import { jobRunner } from '../jobs/index.js';
 import { objectiveStore } from '../autonomy/index.js';
-import { cancelObjectiveById } from '../cancel/cancellation-coordinator.js';
+import { cancelJobById, cancelObjectiveById } from '../cancel/cancellation-coordinator.js';
 import type {
   DashboardTask,
   AgentStatusInfo,
@@ -283,6 +283,101 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     }
     json(res, { objective });
+    return true;
+  }
+
+  const jobResultMatch = path.match(/^\/api\/jobs\/([^/]+)\/result$/);
+  if (jobResultMatch && method === 'GET') {
+    const snap = jobRunner.get(jobResultMatch[1]);
+    if (!snap) {
+      notFound(res);
+      return true;
+    }
+    json(res, {
+      jobId: snap.jobId,
+      state: snap.state,
+      resultSummary: snap.resultSummary ?? null,
+      artifacts: snap.artifacts ?? [],
+      error: snap.error ?? null,
+      endedAt: snap.endedAt ?? null,
+      finalText: snap.resultSummary ?? null,
+      changedFiles: (snap.artifacts ?? []).filter((artifact) => !artifact.startsWith('http')),
+      childSummaries: snap.childJobIds
+        .map((childId) => jobRunner.get(childId)?.resultSummary)
+        .filter((value): value is string => Boolean(value)),
+      delivery: snap.returnRoute
+        ? {
+            mode: snap.returnRoute.mode,
+            delivered: snap.state === 'succeeded',
+            channelId: snap.returnRoute.channelId,
+            threadId: snap.returnRoute.threadId,
+            userId: snap.returnRoute.userId,
+          }
+        : null,
+    });
+    return true;
+  }
+
+  const jobLogsMatch = path.match(/^\/api\/jobs\/([^/]+)\/logs$/);
+  if (jobLogsMatch && method === 'GET') {
+    const snap = jobRunner.get(jobLogsMatch[1]);
+    if (!snap) {
+      notFound(res);
+      return true;
+    }
+    const limitRaw = parseInt(url.searchParams.get('limit') ?? '200', 10);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 2000)) : 200;
+    const cursorRaw = parseInt(url.searchParams.get('cursor') ?? '0', 10);
+    const total = snap.logs?.length ?? 0;
+    const cursor = Number.isFinite(cursorRaw) ? Math.max(0, Math.min(cursorRaw, total)) : 0;
+    const logs = (snap.logs ?? []).slice(cursor, cursor + limit);
+    const nextCursor = cursor + logs.length;
+    json(res, {
+      jobId: snap.jobId,
+      state: snap.state,
+      total,
+      cursor,
+      nextCursor,
+      hasMore: nextCursor < total,
+      logs,
+    });
+    return true;
+  }
+
+  const jobEventsMatch = path.match(/^\/api\/jobs\/([^/]+)\/events$/);
+  if (jobEventsMatch && method === 'GET') {
+    const snap = jobRunner.get(jobEventsMatch[1]);
+    if (!snap) {
+      notFound(res);
+      return true;
+    }
+    const limitRaw = parseInt(url.searchParams.get('limit') ?? '200', 10);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 2000)) : 200;
+    const cursorRaw = parseInt(url.searchParams.get('cursor') ?? '0', 10);
+    const total = snap.events?.length ?? 0;
+    const cursor = Number.isFinite(cursorRaw) ? Math.max(0, Math.min(cursorRaw, total)) : 0;
+    const events = (snap.events ?? []).slice(cursor, cursor + limit);
+    const nextCursor = cursor + events.length;
+    json(res, {
+      jobId: snap.jobId,
+      state: snap.state,
+      total,
+      cursor,
+      nextCursor,
+      hasMore: nextCursor < total,
+      events,
+    });
+    return true;
+  }
+
+  const jobCancelMatch = path.match(/^\/api\/jobs\/([^/]+)\/cancel$/);
+  if (jobCancelMatch && method === 'POST') {
+    const result = cancelJobById(jobCancelMatch[1]);
+    if (!jobRunner.get(jobCancelMatch[1])) {
+      notFound(res);
+      return true;
+    }
+    json(res, result);
     return true;
   }
 

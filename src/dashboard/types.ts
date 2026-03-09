@@ -271,6 +271,52 @@ export interface DashboardJobInfo {
     threadId?: string;
     userId?: string;
   };
+  artifacts?: string[];
+  returnRoute?: {
+    channelId?: string;
+    threadId?: string;
+    userId?: string;
+    mode?: string;
+  };
+}
+
+export interface DashboardJobResultPayload {
+  jobId: string;
+  state: DashboardJobState;
+  resultSummary?: string | null;
+  artifacts: string[];
+  error?: string | null;
+  endedAt?: number | null;
+  finalText?: string | null;
+  changedFiles?: string[];
+  childSummaries?: string[];
+  delivery?: {
+    mode?: string;
+    delivered: boolean;
+    channelId?: string;
+    threadId?: string;
+    userId?: string;
+  } | null;
+}
+
+export interface DashboardJobLogPage {
+  jobId: string;
+  state: DashboardJobState;
+  total: number;
+  cursor: number;
+  nextCursor: number;
+  hasMore: boolean;
+  logs: Array<{ at: number; level: 'info' | 'warn' | 'error'; message: string }>;
+}
+
+export interface DashboardJobEventPage {
+  jobId: string;
+  state: DashboardJobState;
+  total: number;
+  cursor: number;
+  nextCursor: number;
+  hasMore: boolean;
+  events: JobEvent[];
 }
 
 export interface DashboardJobMetrics {
