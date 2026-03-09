@@ -6,14 +6,7 @@ import {
 } from 'discord.js';
 
 import { jobRunner } from '../../jobs/index.js';
-import { npmBuildV2, type NpmBuildV2Payload } from '../../jobs/workers/npm-build-v2.js';
-import {
-  fullSelfRefreshJob,
-  restartDiscordServiceJob,
-  selfCheckJob,
-  selfUpdateJob,
-} from '../../jobs/workers/devops-maintenance.js';
-import { agentDeepLoopJob, type AgentDeepLoopPayload } from '../../jobs/workers/agent-deep-loop.js';
+import { prepareAgentDeepLoopJob, prepareMaintenanceJob } from '../../jobs/core/job-definitions.js';
 import { postJobStarted } from '../jobs/job-notifier.js';
 import { approvalManager } from '../approvals/index.js';
 import { getApprovalDecision } from '../../jobs/core/approval-policy.js';
@@ -171,22 +164,45 @@ export async function devopsCommand(interaction: ChatInputCommandInteraction) {
 
   const repoPath = repoPathFromEnvOrCwd();
 
-  let handler;
+  let preparedJob;
   if (jobName === 'build') {
-    const payload: NpmBuildV2Payload = { repoPath };
-    handler = npmBuildV2(payload);
+    preparedJob = prepareMaintenanceJob({
+      job: 'build',
+      repoPath,
+      timeoutMs: 1000 * 60 * 15,
+      name: 'devops:build',
+    });
   } else if (jobName === 'self-check') {
-    handler = selfCheckJob(repoPath);
+    preparedJob = prepareMaintenanceJob({
+      job: 'self-check',
+      repoPath,
+      timeoutMs: 1000 * 60 * 15,
+    });
   } else if (jobName === 'self-update') {
-    handler = selfUpdateJob(repoPath);
+    preparedJob = prepareMaintenanceJob({
+      job: 'self-update',
+      repoPath,
+      timeoutMs: 1000 * 60 * 15,
+    });
   } else if (jobName === 'restart-discord-service') {
-    handler = restartDiscordServiceJob();
+    preparedJob = prepareMaintenanceJob({
+      job: 'restart-discord-service',
+      timeoutMs: 1000 * 60 * 15,
+    });
   } else if (jobName === 'full-self-refresh') {
-    handler = fullSelfRefreshJob(repoPath);
-    } else {
-      const parentChatId = discordSessionId(interaction.user.id, interaction.channelId);
-      const childChatId = delegatedSessionId(`${parentChatId}:${jobName}:${Date.now()}`);
-      const payload: AgentDeepLoopPayload = {
+    preparedJob = prepareMaintenanceJob({
+      job: 'full-self-refresh',
+      repoPath,
+      timeoutMs: 1000 * 60 * 15,
+    });
+  } else {
+    const parentChatId = discordSessionId(interaction.user.id, interaction.channelId);
+    const childChatId = delegatedSessionId(`${parentChatId}:${jobName}:${Date.now()}`);
+    preparedJob = prepareAgentDeepLoopJob({
+      name: 'devops:agent-loop-30m',
+      lane: 'subagent',
+      timeoutMs: 1000 * 60 * 30,
+      payload: {
         userId: interaction.user.id,
         parentChatId,
         childChatId,
@@ -194,9 +210,9 @@ export async function devopsCommand(interaction: ChatInputCommandInteraction) {
           deepTask ||
           'Run a 30 minute deep implementation/research loop and return a concise report with findings, diffs, and next actions.',
         model: deepModel || 'gpt-5.3-codex-spark',
-      };
-      handler = agentDeepLoopJob(payload);
-    }
+      },
+    });
+  }
 
   const origin = {
     guildId: interaction.guildId ?? undefined,
@@ -204,8 +220,8 @@ export async function devopsCommand(interaction: ChatInputCommandInteraction) {
     threadId: interaction.channel?.isThread() ? interaction.channelId : undefined,
     userId: interaction.user.id,
   };
-  const timeoutMs = jobName === 'agent-loop-30m' ? 1000 * 60 * 30 : 1000 * 60 * 15;
-  const fullJobName = `devops:${jobName}`;
+  const timeoutMs = preparedJob.timeoutMs ?? (jobName === 'agent-loop-30m' ? 1000 * 60 * 30 : 1000 * 60 * 15);
+  const fullJobName = preparedJob.name;
   const decision = getApprovalDecision(fullJobName, timeoutMs);
 
   if (decision.requiresApproval) {
@@ -237,12 +253,14 @@ export async function devopsCommand(interaction: ChatInputCommandInteraction) {
   });
 
   const jobId = jobRunner.enqueue({
-    name: fullJobName,
-    lane: jobName === 'agent-loop-30m' ? 'subagent' : 'maintenance',
+    name: preparedJob.name,
+    lane: preparedJob.lane,
     origin,
-    handler,
-    timeoutMs,
+    handler: preparedJob.handler,
+    timeoutMs: preparedJob.timeoutMs,
     idempotencyKey,
+    resumeSpec: preparedJob.resumeSpec,
+    handoff: preparedJob.handoff,
   });
 
   await postJobStarted(interaction, jobId);

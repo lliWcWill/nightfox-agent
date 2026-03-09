@@ -21,8 +21,8 @@ import { z } from 'zod';
 import { resolveBin } from '../utils/resolve-bin.js';
 import { jobRunner } from '../jobs/index.js';
 import { getApprovalDecision } from '../jobs/core/approval-policy.js';
+import { prepareAgentDeepLoopJob, prepareCodeRabbitReviewJob } from '../jobs/core/job-definitions.js';
 import { config } from '../config.js';
-import { agentDeepLoopJob } from '../jobs/workers/agent-deep-loop.js';
 import { delegatedSessionId } from '../discord/id-mapper.js';
 import { getCurrentToolChatId, getCurrentToolJobId, getCurrentToolOrigin } from './openai-tool-context.js';
 
@@ -736,15 +736,25 @@ function createDelegateDeepTaskTool() {
           ? chatId
           : delegatedSessionId(makeStableHeadlessSeed('parent-chat', `${trimmed}:${requestedModel}:${max_iterations ?? ''}`));
         const childChatId = createDelegatedChildChatId(effectiveParentChatId, trimmed, requestedModel);
-        const handler = agentDeepLoopJob({
-          parentChatId: effectiveParentChatId,
-          childChatId,
-          task: trimmed,
-          model: requestedModel,
-          maxIterations:
-            typeof max_iterations === 'number'
-              ? Math.max(1, Math.min(64, Math.floor(max_iterations)))
-              : undefined,
+        const timeoutMs = 1000 * 60 * 30;
+        const handoff = parentJobId && typeof chatId === 'number'
+          ? { mode: 'parent-session' as const, parentChatId: effectiveParentChatId, platform: 'discord' as const }
+          : undefined;
+        const job = prepareAgentDeepLoopJob({
+          name: 'agent:autonomous-deep-loop',
+          lane: 'subagent',
+          timeoutMs,
+          handoff,
+          payload: {
+            parentChatId: effectiveParentChatId,
+            childChatId,
+            task: trimmed,
+            model: requestedModel,
+            maxIterations:
+              typeof max_iterations === 'number'
+                ? Math.max(1, Math.min(64, Math.floor(max_iterations)))
+                : undefined,
+          },
         });
 
         const originResolved = resolveDelegateOrigin(
@@ -764,21 +774,22 @@ function createDelegateDeepTaskTool() {
           max_iterations: max_iterations ?? null,
         });
 
-        const timeoutMs = 1000 * 60 * 30;
-        const jobName = 'agent:autonomous-deep-loop';
+        const jobName = job.name;
         const decision = getApprovalDecision(jobName, timeoutMs);
         if (decision.requiresApproval) {
           return `[error] ${jobName} requires approval (${decision.reason}). Run via /devops for approval flow.`;
         }
 
         const jobId = jobRunner.enqueue({
-          name: jobName,
-          lane: 'subagent',
+          name: job.name,
+          lane: job.lane,
           origin,
-          handler,
-          timeoutMs,
+          handler: job.handler,
+          timeoutMs: job.timeoutMs,
           idempotencyKey,
           parentJobId,
+          resumeSpec: job.resumeSpec,
+          handoff: job.handoff,
         });
 
         return JSON.stringify({
@@ -812,7 +823,6 @@ function createDelegateCodeRabbitReviewTool(cwd: string) {
     }),
     execute: async ({ base_ref, target, repo_path }) => {
       try {
-        const { coderabbitReview } = await import('../jobs/workers/coderabbit-review.js');
         const baseRef = (base_ref ?? 'origin/main').trim() || 'origin/main';
         const selectedTarget = target ?? 'committed';
         const repoPath = (repo_path ?? cwd).trim() || cwd;
@@ -839,31 +849,33 @@ function createDelegateCodeRabbitReviewTool(cwd: string) {
             promptOnly: true,
           });
           const timeoutMs = 1000 * 60 * 20;
-          const jobName = 'coderabbit-review';
+          const job = prepareCodeRabbitReviewJob({
+            timeoutMs,
+            handoff: parentJobId && typeof chatId === 'number'
+              ? { mode: 'parent-session', parentChatId: chatId, platform: 'discord' }
+              : undefined,
+            payload: {
+              repoPath,
+              baseRef,
+              target: t,
+              promptOnly: true,
+            },
+          });
+          const jobName = job.name;
           const decision = getApprovalDecision(jobName, timeoutMs);
           if (decision.requiresApproval) {
             throw new Error(`${jobName} requires approval (${decision.reason}). Run via /devops for approval flow.`);
           }
           return jobRunner.enqueue({
-            name: jobName,
-            lane: 'review',
+            name: job.name,
+            lane: job.lane,
             origin: toolOrigin,
-            handler: async (ctx) =>
-              coderabbitReview({
-                id: ctx.jobId,
-                name: jobName,
-                payload: {
-                  repoPath,
-                  baseRef,
-                  target: t,
-                  promptOnly: true,
-                },
-                state: 'running',
-                createdAt: Date.now(),
-              }),
-            timeoutMs,
+            handler: job.handler,
+            timeoutMs: job.timeoutMs,
             idempotencyKey,
             parentJobId,
+            resumeSpec: job.resumeSpec,
+            handoff: job.handoff,
           });
         });
 
@@ -914,15 +926,24 @@ function createDelegateCodexHighReviewTool() {
           ? chatId
           : delegatedSessionId(makeStableHeadlessSeed('parent-chat', `${reviewTask}:${max_iterations ?? ''}`));
         const childChatId = createDelegatedChildChatId(effectiveParentChatId, reviewTask, 'gpt-5.4');
-        const handler = agentDeepLoopJob({
-          parentChatId: effectiveParentChatId,
-          childChatId,
-          task: reviewTask,
-          model: 'gpt-5.4',
-          maxIterations:
-            typeof max_iterations === 'number'
-              ? Math.max(1, Math.min(64, Math.floor(max_iterations)))
-              : undefined,
+        const timeoutMs = 1000 * 60 * 30;
+        const job = prepareAgentDeepLoopJob({
+          name: 'agent:codex-high-review',
+          lane: 'review',
+          timeoutMs,
+          handoff: parentJobId && typeof chatId === 'number'
+            ? { mode: 'parent-session', parentChatId: effectiveParentChatId, platform: 'discord' }
+            : undefined,
+          payload: {
+            parentChatId: effectiveParentChatId,
+            childChatId,
+            task: reviewTask,
+            model: 'gpt-5.4',
+            maxIterations:
+              typeof max_iterations === 'number'
+                ? Math.max(1, Math.min(64, Math.floor(max_iterations)))
+                : undefined,
+          },
         });
 
         const originResolved = resolveDelegateOrigin(
@@ -942,21 +963,22 @@ function createDelegateCodexHighReviewTool() {
           max_iterations: max_iterations ?? null,
         });
 
-        const timeoutMs = 1000 * 60 * 30;
-        const jobName = 'agent:codex-high-review';
+        const jobName = job.name;
         const decision = getApprovalDecision(jobName, timeoutMs);
         if (decision.requiresApproval) {
           return `[error] ${jobName} requires approval (${decision.reason}). Run via /devops for approval flow.`;
         }
 
         const jobId = jobRunner.enqueue({
-          name: jobName,
-          lane: 'review',
+          name: job.name,
+          lane: job.lane,
           origin,
-          handler,
-          timeoutMs,
+          handler: job.handler,
+          timeoutMs: job.timeoutMs,
           idempotencyKey,
           parentJobId,
+          resumeSpec: job.resumeSpec,
+          handoff: job.handoff,
         });
 
         return JSON.stringify({

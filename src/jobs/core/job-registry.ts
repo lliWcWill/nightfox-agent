@@ -28,6 +28,12 @@ export class JobRegistry {
       .slice(0, limit);
   }
 
+  listByState(state: JobState): JobSnapshot[] {
+    return Array.from(this.jobs.values())
+      .filter((job) => job.state === state)
+      .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  }
+
   apply(ev: JobEvent, opts?: { persist?: boolean; sweep?: boolean }) {
     const now = ev.at;
     const existing = this.jobs.get(ev.jobId);
@@ -36,18 +42,22 @@ export class JobRegistry {
 
     if (!existing) {
       if (ev.type !== 'job:queued') throw new Error(`unknown job ${ev.jobId}`);
-      const snap: JobSnapshot = {
-        jobId: ev.jobId,
-        name: ev.name,
-        createdAt: now,
-        lane: ev.lane ?? 'main',
-        parentJobId: ev.parentJobId,
-        rootJobId: ev.rootJobId ?? ev.parentJobId ?? ev.jobId,
-        childJobIds: [],
-        state: 'queued',
-        origin: (null as any),
-        logs: [],
-      };
+        const snap: JobSnapshot = {
+          jobId: ev.jobId,
+          name: ev.name,
+          createdAt: now,
+          lane: ev.lane ?? 'main',
+          parentJobId: ev.parentJobId,
+          rootJobId: ev.rootJobId ?? ev.parentJobId ?? ev.jobId,
+          childJobIds: [],
+          timeoutMs: ev.timeoutMs,
+          stallTimeoutMs: ev.stallTimeoutMs,
+          resumeSpec: ev.resumeSpec,
+          handoff: ev.handoff,
+          state: 'queued',
+          origin: (null as any),
+          logs: [],
+        };
       this.jobs.set(ev.jobId, snap);
       if (ev.parentJobId) {
         const parent = this.jobs.get(ev.parentJobId);

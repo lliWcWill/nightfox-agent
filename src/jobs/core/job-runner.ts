@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
-import { JobEvent, JobHandler, JobLane, JobOrigin, JobRunContext } from './job-types';
+import { JobEvent, JobHandler, JobHandoff, JobLane, JobOrigin, JobResumeSpec, JobRunContext, JobSnapshot } from './job-types';
 import { JobRegistry } from './job-registry';
 
 type EnqueueOpts = {
@@ -13,6 +13,8 @@ type EnqueueOpts = {
   idempotencyKey?: string;
   parentJobId?: string;
   rootJobId?: string;
+  resumeSpec?: JobResumeSpec;
+  handoff?: JobHandoff;
 };
 
 type RetrySpec = {
@@ -24,6 +26,15 @@ type RetrySpec = {
   stallTimeoutMs?: number;
   parentJobId?: string;
   rootJobId?: string;
+  resumeSpec?: JobResumeSpec;
+  handoff?: JobHandoff;
+};
+
+type QueuedJob = EnqueueOpts & {
+  lane: JobLane;
+  jobId: string;
+  createdAt: number;
+  rootJobId: string;
 };
 
 type Running = {
@@ -54,7 +65,7 @@ type JobMetricsSnapshot = {
 export class JobRunner {
   private registry: JobRegistry;
   private emitter = new EventEmitter();
-  private queues = new Map<JobLane, Array<EnqueueOpts & { lane: JobLane; jobId: string; createdAt: number }>>();
+  private queues = new Map<JobLane, QueuedJob[]>();
   private running: Running | null = null;
   private concurrency: number;
   private retrySpecs = new Map<string, RetrySpec>();
@@ -98,6 +109,53 @@ export class JobRunner {
     return q;
   }
 
+  private trackRetrySpec(jobId: string, spec: QueuedJob) {
+    this.retrySpecs.set(jobId, {
+      name: spec.name,
+      lane: spec.lane,
+      origin: { ...spec.origin },
+      handler: spec.handler,
+      timeoutMs: spec.timeoutMs,
+      stallTimeoutMs: spec.stallTimeoutMs,
+      parentJobId: spec.parentJobId,
+      rootJobId: spec.rootJobId,
+      resumeSpec: spec.resumeSpec,
+      handoff: spec.handoff,
+    });
+  }
+
+  private pushQueuedJob(spec: QueuedJob, opts?: { countQueuedMetric?: boolean }) {
+    this.laneQueue(spec.lane).push(spec);
+    if (opts?.countQueuedMetric !== false) {
+      this.metrics.totalQueued += 1;
+    }
+    const queueDepth = this.totalQueueDepth();
+    if (queueDepth > this.metrics.peakQueueDepth) this.metrics.peakQueueDepth = queueDepth;
+    this.trackRetrySpec(spec.jobId, spec);
+  }
+
+  private buildQueuedJobFromSnapshot(snapshot: JobSnapshot, handler: JobHandler): QueuedJob {
+    return {
+      name: snapshot.name,
+      lane: snapshot.lane,
+      origin: snapshot.origin,
+      handler,
+      timeoutMs: snapshot.timeoutMs,
+      stallTimeoutMs: snapshot.stallTimeoutMs,
+      idempotencyKey: snapshot.idempotencyKey,
+      parentJobId: snapshot.parentJobId,
+      rootJobId: snapshot.rootJobId,
+      resumeSpec: snapshot.resumeSpec,
+      handoff: snapshot.handoff,
+      jobId: snapshot.jobId,
+      createdAt: snapshot.createdAt,
+    };
+  }
+
+  private hasRunnableOrigin(snapshot: JobSnapshot): boolean {
+    return Boolean(snapshot.origin?.channelId && snapshot.origin?.userId);
+  }
+
   private totalQueueDepth() {
     let total = 0;
     for (const q of this.queues.values()) total += q.length;
@@ -125,28 +183,39 @@ export class JobRunner {
       if (!reserved.ok) return reserved.existingJobId;
     }
 
-      const rootJobId = opts.rootJobId ?? opts.parentJobId ?? jobId;
-    this.registry.apply({ type: 'job:queued', jobId, name: opts.name, lane, at, parentJobId: opts.parentJobId, rootJobId });
+    const rootJobId = opts.rootJobId ?? opts.parentJobId ?? jobId;
+    this.registry.apply({
+      type: 'job:queued',
+      jobId,
+      name: opts.name,
+      lane,
+      at,
+      parentJobId: opts.parentJobId,
+      rootJobId,
+      timeoutMs: opts.timeoutMs,
+      stallTimeoutMs: opts.stallTimeoutMs,
+      resumeSpec: opts.resumeSpec,
+      handoff: opts.handoff,
+    });
     this.registry.setOrigin(jobId, opts.origin);
     if (opts.idempotencyKey) {
       this.registry.apply({ type: 'job:idempotency', jobId, key: opts.idempotencyKey, at });
     }
-    this.emit({ type: 'job:queued', jobId, name: opts.name, lane, at, parentJobId: opts.parentJobId, rootJobId });
-
-    this.laneQueue(lane).push({ ...opts, lane, rootJobId, jobId, createdAt: at });
-    this.metrics.totalQueued += 1;
-    const queueDepth = this.totalQueueDepth();
-    if (queueDepth > this.metrics.peakQueueDepth) this.metrics.peakQueueDepth = queueDepth;
-    this.retrySpecs.set(jobId, {
+    this.emit({
+      type: 'job:queued',
+      jobId,
       name: opts.name,
       lane,
-      origin: { ...opts.origin },
-      handler: opts.handler,
-        timeoutMs: opts.timeoutMs,
-        stallTimeoutMs: opts.stallTimeoutMs,
+      at,
       parentJobId: opts.parentJobId,
       rootJobId,
+      timeoutMs: opts.timeoutMs,
+      stallTimeoutMs: opts.stallTimeoutMs,
+      resumeSpec: opts.resumeSpec,
+      handoff: opts.handoff,
     });
+
+    this.pushQueuedJob({ ...opts, lane, rootJobId, jobId, createdAt: at });
     void this.pump();
     return jobId;
   }
@@ -159,10 +228,12 @@ export class JobRunner {
       lane: spec.lane,
       origin: { ...spec.origin },
       handler: spec.handler,
-        timeoutMs: spec.timeoutMs,
-        stallTimeoutMs: spec.stallTimeoutMs,
+      timeoutMs: spec.timeoutMs,
+      stallTimeoutMs: spec.stallTimeoutMs,
       parentJobId: spec.parentJobId,
       rootJobId: spec.rootJobId,
+      resumeSpec: spec.resumeSpec,
+      handoff: spec.handoff,
     });
   }
 
@@ -231,6 +302,114 @@ export class JobRunner {
     const at = Date.now();
     this.registry.apply({ type: 'job:origin', jobId, origin, at });
     this.emit({ type: 'job:origin', jobId, origin, at });
+  }
+
+  rehydrateQueuedJobs(params: {
+    reason: string;
+    shouldResumeLane: (lane: JobLane) => boolean;
+    resolveHandler: (snapshot: JobSnapshot) => JobHandler | null;
+  }): { resumed: number; finalized: number } {
+    const queued = this.registry.listByState('queued');
+    let resumed = 0;
+    let finalized = 0;
+
+    for (const snapshot of queued) {
+      if (!params.shouldResumeLane(snapshot.lane)) {
+        this.finalizeQueuedStartupSkip(
+          snapshot,
+          `${params.reason} (prev=queued, lane=${snapshot.lane}, auto-resume disabled)`,
+        );
+        finalized += 1;
+        continue;
+      }
+
+      if (!snapshot.resumeSpec) {
+        this.finalizeQueuedStartupSkip(
+          snapshot,
+          `${params.reason} (prev=queued, missing persisted resume spec)`,
+        );
+        finalized += 1;
+        continue;
+      }
+
+      if (!this.hasRunnableOrigin(snapshot)) {
+        this.finalizeQueuedStartupSkip(
+          snapshot,
+          `${params.reason} (prev=queued, missing persisted origin)`,
+        );
+        finalized += 1;
+        continue;
+      }
+
+      const handler = params.resolveHandler(snapshot);
+      if (!handler) {
+        this.finalizeQueuedStartupSkip(
+          snapshot,
+          `${params.reason} (prev=queued, unsupported resume spec ${snapshot.resumeSpec.kind})`,
+        );
+        finalized += 1;
+        continue;
+      }
+
+      const at = Date.now();
+      this.registry.apply({
+        type: 'job:log',
+        jobId: snapshot.jobId,
+        level: 'info',
+        message: `${params.reason} (prev=queued, rehydrated)`,
+        at,
+      });
+      this.emit({
+        type: 'job:log',
+        jobId: snapshot.jobId,
+        level: 'info',
+        message: `${params.reason} (prev=queued, rehydrated)`,
+        at,
+      });
+      this.pushQueuedJob(this.buildQueuedJobFromSnapshot(snapshot, handler), { countQueuedMetric: false });
+      resumed += 1;
+    }
+
+    if (resumed > 0) {
+      void this.pump();
+    }
+
+    return { resumed, finalized };
+  }
+
+  private finalizeQueuedStartupSkip(snapshot: JobSnapshot, message: string) {
+    const at = Date.now();
+    this.registry.apply({
+      type: 'job:log',
+      jobId: snapshot.jobId,
+      level: 'error',
+      message,
+      at,
+    });
+    this.emit({
+      type: 'job:log',
+      jobId: snapshot.jobId,
+      level: 'error',
+      message,
+      at,
+    });
+    this.registry.setError(snapshot.jobId, message);
+    this.registry.apply({
+      type: 'job:end',
+      jobId: snapshot.jobId,
+      state: 'timeout',
+      exitCode: null,
+      at,
+    });
+    this.emit({
+      type: 'job:end',
+      jobId: snapshot.jobId,
+      state: 'timeout',
+      exitCode: null,
+      at,
+    });
+    this.metrics.totalEnded += 1;
+    this.metrics.totalTimeout += 1;
   }
 
   private async pump() {

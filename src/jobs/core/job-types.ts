@@ -4,8 +4,63 @@ export type JobLogLevel = 'info' | 'warn' | 'error';
 
 export type JobLane = 'main' | 'subagent' | 'review' | 'maintenance';
 
+export type JobPlatform = 'discord' | 'telegram';
+
+export type AgentDeepLoopResumeSpec = {
+  kind: 'agent-deep-loop';
+  payload: {
+    userId?: string;
+    parentChatId: number;
+    childChatId: number;
+    task: string;
+    model?: string;
+    maxIterations?: number;
+  };
+};
+
+export type CodeRabbitReviewResumeSpec = {
+  kind: 'coderabbit-review';
+  payload: {
+    repoPath: string;
+    baseRef: string;
+    target: 'committed' | 'uncommitted';
+    promptOnly: boolean;
+  };
+};
+
+export type MaintenanceResumeSpec = {
+  kind: 'maintenance';
+  payload: {
+    job: 'build' | 'self-check' | 'self-update' | 'restart-discord-service' | 'full-self-refresh';
+    repoPath?: string;
+  };
+};
+
+export type JobResumeSpec =
+  | AgentDeepLoopResumeSpec
+  | CodeRabbitReviewResumeSpec
+  | MaintenanceResumeSpec;
+
+export type JobHandoff = {
+  mode: 'parent-session';
+  parentChatId: number;
+  platform?: JobPlatform;
+};
+
 export type JobEvent =
-  | { type: 'job:queued'; jobId: string; name: string; at: number; lane?: JobLane; parentJobId?: string; rootJobId?: string }
+  | {
+      type: 'job:queued';
+      jobId: string;
+      name: string;
+      at: number;
+      lane?: JobLane;
+      parentJobId?: string;
+      rootJobId?: string;
+      timeoutMs?: number;
+      stallTimeoutMs?: number;
+      resumeSpec?: JobResumeSpec;
+      handoff?: JobHandoff;
+    }
   | { type: 'job:origin'; jobId: string; origin: JobOrigin; at: number }
   | { type: 'job:idempotency'; jobId: string; key: string; at: number }
   | { type: 'job:start'; jobId: string; at: number; lane?: JobLane }
@@ -32,6 +87,10 @@ export type JobSnapshot = {
   rootJobId: string;
   childJobIds: string[];
   idempotencyKey?: string;
+  timeoutMs?: number;
+  stallTimeoutMs?: number;
+  resumeSpec?: JobResumeSpec;
+  handoff?: JobHandoff;
   startedAt?: number;
   endedAt?: number;
   state: JobState;

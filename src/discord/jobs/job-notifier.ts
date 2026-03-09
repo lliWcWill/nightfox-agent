@@ -1,6 +1,7 @@
 import { ButtonInteraction, ChatInputCommandInteraction, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionReplyOptions } from 'discord.js';
 import { jobRunner } from '../../jobs/index.js';
 import { JobEvent, JobSnapshot } from '../../jobs/core/job-types';
+import { synthesizeChildCompletionForParentSession } from '../../jobs/core/job-parent-handoff.js';
 import { splitDiscordMessage } from '../markdown.js';
 import { conversationActivityGate } from './activity-gate.js';
 import { jobNotificationOutbox } from './job-notification-outbox.js';
@@ -36,6 +37,19 @@ function renderCompletionAnnouncement(snap: JobSnapshot): string {
   }
 
   return lines.join('\n');
+}
+
+async function sendAnnouncementToOrigin(client: any, snap: JobSnapshot, content: string): Promise<boolean> {
+  if (!snap.origin?.channelId) return false;
+  const ch = await client.channels.fetch(snap.origin.threadId ?? snap.origin.channelId);
+  if (!ch || !('send' in ch)) {
+    return false;
+  }
+  const chunks = splitDiscordMessage(content, 1800);
+  for (const chunk of chunks) {
+    await (ch as any).send({ content: chunk });
+  }
+  return true;
 }
 
 export function jobActionRow(jobId: string, canCancel: boolean, canRetry = false, canShowResult = false) {
@@ -146,56 +160,62 @@ export function attachJobNotifier(client: any) {
   // Flush any persisted pending notifications after restart
   scheduleDeferredDispatch();
 
-    jobRunner.onEvent(async (ev: JobEvent) => {
-      const snap = jobRunner.get(ev.jobId);
+  jobRunner.onEvent(async (ev: JobEvent) => {
+    const snap = jobRunner.get(ev.jobId);
 
-      if (ev.type === 'job:end' && snap) {
-        if (snap.parentJobId) {
-          try {
-            const ch = await client.channels.fetch(snap.origin.threadId ?? snap.origin.channelId);
-            if (ch && 'send' in ch) {
-              const chunks = splitDiscordMessage(renderCompletionAnnouncement(snap), 1800);
-              for (const chunk of chunks) {
-                await (ch as any).send({ content: chunk });
-              }
+    if (ev.type === 'job:end' && snap) {
+      if (snap.parentJobId) {
+        try {
+          if (snap.handoff?.mode === 'parent-session') {
+            const parent = jobRunner.get(snap.parentJobId);
+            const synthesized = await synthesizeChildCompletionForParentSession({
+              child: snap,
+              parent: parent ?? undefined,
+            });
+            if (synthesized.ok && await sendAnnouncementToOrigin(client, snap, synthesized.content)) {
               return;
             }
-          } catch {
-            // Fall back to outbox delivery below if direct announce fails.
           }
+
+          if (await sendAnnouncementToOrigin(client, snap, renderCompletionAnnouncement(snap))) {
+            return;
+          }
+        } catch {
+          // Fall back to outbox delivery below if direct announce fails.
         }
-        jobNotificationOutbox.enqueueFromSnapshot(snap);
-        scheduleDeferredDispatch();
       }
+      jobNotificationOutbox.enqueueFromSnapshot(snap);
+      scheduleDeferredDispatch();
+    }
 
     if (!snap?.origin?.channelId || !snap.origin.statusMessageId) return;
-
     if (editTimers.has(ev.jobId)) return;
-    const t = setTimeout(async () => {
-      editTimers.delete(ev.jobId);
-      try {
-        const ch = await client.channels.fetch(snap.origin.threadId ?? snap.origin.channelId);
-        if (!ch || !('messages' in ch)) return;
-        const msg = await (ch as any).messages.fetch(snap.origin.statusMessageId);
-        const runtimeMs = snap.startedAt ? (snap.endedAt ?? Date.now()) - snap.startedAt : 0;
-        const line = snap.progress ? `\nProgress: ${snap.progress}` : '';
-        const content = `Job: **${snap.name}**\nID: \`${snap.jobId}\`\nState: ${fmtState(snap.state)} (${Math.round(runtimeMs / 1000)}s)${line}`;
-        await msg.edit({
-          content,
-          components: [jobActionRow(
-            snap.jobId,
-            snap.state === 'queued' || snap.state === 'running',
-            snap.state === 'failed' || snap.state === 'timeout' || snap.state === 'canceled',
-            Boolean(snap.resultSummary || (snap.artifacts && snap.artifacts.length)),
-          )],
-        });
-      } catch {
-        // ignore
-      }
-    }, 1250);
-    editTimers.set(ev.jobId, t);
-  });
-}
+
+      const t = setTimeout(async () => {
+        editTimers.delete(ev.jobId);
+        try {
+          const ch = await client.channels.fetch(snap.origin.threadId ?? snap.origin.channelId);
+          if (!ch || !('messages' in ch)) return;
+          const msg = await (ch as any).messages.fetch(snap.origin.statusMessageId);
+          const runtimeMs = snap.startedAt ? (snap.endedAt ?? Date.now()) - snap.startedAt : 0;
+          const line = snap.progress ? `\nProgress: ${snap.progress}` : '';
+          const content = `Job: **${snap.name}**\nID: \`${snap.jobId}\`\nState: ${fmtState(snap.state)} (${Math.round(runtimeMs / 1000)}s)${line}`;
+          await msg.edit({
+            content,
+            components: [jobActionRow(
+              snap.jobId,
+              snap.state === 'queued' || snap.state === 'running',
+              snap.state === 'failed' || snap.state === 'timeout' || snap.state === 'canceled',
+              Boolean(snap.resultSummary || (snap.artifacts && snap.artifacts.length)),
+            )],
+          });
+        } catch {
+          // ignore
+        }
+      }, 1250);
+      editTimers.set(ev.jobId, t);
+    });
+  }
 
 export async function handleJobButton(i: ButtonInteraction) {
   const parts = String(i.customId || '').split(':');
