@@ -221,6 +221,8 @@ export interface QueueInfo {
   chatId: number;
   depth: number;
   isProcessing: boolean;
+  lastMessage?: string;
+  updatedAt: number;
 }
 
 export interface DashboardTask {
@@ -233,4 +235,66 @@ export interface DashboardTask {
   linkedSession?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export type DashboardJobState =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'canceled'
+  | 'timeout';
+
+export type DashboardJobLane = 'main' | 'subagent' | 'review' | 'maintenance';
+
+export interface DashboardJobInfo {
+  jobId: string;
+  name: string;
+  lane: DashboardJobLane;
+  state: DashboardJobState;
+  createdAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  parentJobId?: string;
+  rootJobId: string;
+  progress?: string;
+  resultSummary?: string;
+  error?: string;
+  origin?: {
+    channelId?: string;
+    threadId?: string;
+    userId?: string;
+  };
+}
+
+export interface DashboardJobMetrics {
+  totalQueued: number;
+  totalStarted: number;
+  totalEnded: number;
+  totalSucceeded: number;
+  totalFailed: number;
+  totalCanceled: number;
+  totalTimeout: number;
+  queueDepth: number;
+  running: boolean;
+  peakQueueDepth: number;
+  waitP95Ms: number;
+  runP95Ms: number;
+}
+
+export interface FleetSummary {
+  generatedAt: number;
+  agents: AgentStatusInfo[];
+  queues: QueueInfo[];
+  jobs: {
+    metrics: DashboardJobMetrics;
+    active: DashboardJobInfo[];
+    recent: DashboardJobInfo[];
+  };
+  config: {
+    botName: string;
+    botMode: string;
+    dashboardPort: number;
+    dangerousMode: boolean;
+  };
 }

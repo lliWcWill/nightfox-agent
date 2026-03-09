@@ -1,10 +1,15 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { sessionManager } from '../claude/session-manager.js';
 import { getCachedUsage } from '../claude/agent.js';
-import { isProcessing, getQueuePosition } from '../claude/request-queue.js';
 import { config } from '../config.js';
-import type { DashboardTask, AgentStatusInfo, QueueInfo } from './types.js';
+import { jobRunner } from '../jobs/index.js';
+import type {
+  DashboardTask,
+  AgentStatusInfo,
+  QueueInfo,
+  DashboardJobInfo,
+  FleetSummary,
+} from './types.js';
 import { ensureHomeStateDir, getHomeStatePath, resolveExistingHomeStatePath } from '../utils/app-paths.js';
 
 // ── In-memory agent status (updated by eventBus listeners in server.ts) ──
@@ -15,6 +20,8 @@ export const agentStatuses: Map<string, AgentStatusInfo> = new Map([
   ['droid', { id: 'droid', status: 'offline' }],
   ['groq', { id: 'groq', status: 'ready' }],
 ]);
+
+export const queueStates: Map<number, QueueInfo> = new Map();
 
 // ── Task storage ────────────────────────────────────────────────────
 
@@ -48,6 +55,107 @@ function loadTasks(): DashboardTask[] {
 function saveTasks(tasks: DashboardTask[]): void {
   ensureHomeStateDir();
   writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
+}
+
+function listQueues(): QueueInfo[] {
+  return [...queueStates.values()]
+    .filter((queue) => queue.depth > 0 || queue.isProcessing)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function snapshotToJobInfo(limit = 50): DashboardJobInfo[] {
+  return jobRunner.listRecent(limit).map((job) => ({
+    jobId: job.jobId,
+    name: job.name,
+    lane: job.lane,
+    state: job.state,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    endedAt: job.endedAt,
+    parentJobId: job.parentJobId,
+    rootJobId: job.rootJobId,
+    progress: job.progress,
+    resultSummary: job.resultSummary,
+    error: job.error,
+    origin: job.origin
+      ? {
+          channelId: job.origin.channelId,
+          threadId: job.origin.threadId,
+          userId: job.origin.userId,
+        }
+      : undefined,
+  }));
+}
+
+function buildFleetSummary(): FleetSummary {
+  const recent = snapshotToJobInfo(100);
+  return {
+    generatedAt: Date.now(),
+    agents: [...agentStatuses.values()],
+    queues: listQueues(),
+    jobs: {
+      metrics: jobRunner.getMetrics(),
+      active: recent.filter((job) => job.state === 'queued' || job.state === 'running'),
+      recent,
+    },
+    config: {
+      botName: config.BOT_NAME,
+      botMode: config.BOT_MODE,
+      dashboardPort: config.DASHBOARD_PORT,
+      dangerousMode: config.DANGEROUS_MODE,
+    },
+  };
+}
+
+export function recordQueueEnqueue(params: {
+  chatId: number;
+  queueDepth: number;
+  message?: string;
+  timestamp: number;
+}) {
+  const current = queueStates.get(params.chatId);
+  queueStates.set(params.chatId, {
+    chatId: params.chatId,
+    depth: Math.max(0, params.queueDepth),
+    isProcessing: current?.isProcessing ?? false,
+    lastMessage: params.message ?? current?.lastMessage,
+    updatedAt: params.timestamp,
+  });
+}
+
+export function recordQueueProcessing(params: {
+  chatId: number;
+  isProcessing: boolean;
+  timestamp: number;
+}) {
+  const current = queueStates.get(params.chatId);
+  queueStates.set(params.chatId, {
+    chatId: params.chatId,
+    depth: current?.depth ?? 0,
+    isProcessing: params.isProcessing,
+    lastMessage: current?.lastMessage,
+    updatedAt: params.timestamp,
+  });
+}
+
+export function recordQueueDequeue(params: {
+  chatId: number;
+  timestamp: number;
+}) {
+  const current = queueStates.get(params.chatId);
+  const nextDepth = Math.max(0, (current?.depth ?? 1) - 1);
+  const next: QueueInfo = {
+    chatId: params.chatId,
+    depth: nextDepth,
+    isProcessing: current?.isProcessing ?? false,
+    lastMessage: current?.lastMessage,
+    updatedAt: params.timestamp,
+  };
+  if (next.depth === 0 && !next.isProcessing) {
+    queueStates.delete(params.chatId);
+    return;
+  }
+  queueStates.set(params.chatId, next);
 }
 
 // ── Request helpers ─────────────────────────────────────────────────
@@ -145,18 +253,60 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
   }
 
   // GET /api/agents/status
-  if (path === '/api/agents/status' && method === 'GET') {
-    json(res, { agents: [...agentStatuses.values()] });
-    return true;
-  }
+    if (path === '/api/agents/status' && method === 'GET') {
+      json(res, { agents: [...agentStatuses.values()] });
+      return true;
+    }
 
-  // GET /api/queue
-  if (path === '/api/queue' && method === 'GET') {
-    const queues: QueueInfo[] = [];
-    // We can't iterate all chatIds, but we track active ones via events
-    json(res, { queues });
-    return true;
-  }
+    // GET /api/queue
+    if (path === '/api/queue' && method === 'GET') {
+      json(res, { queues: listQueues() });
+      return true;
+    }
+
+    // GET /api/jobs
+    if (path === '/api/jobs' && method === 'GET') {
+      const limitRaw = parseInt(url.searchParams.get('limit') ?? '50', 10);
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 200)) : 50;
+      const state = url.searchParams.get('state');
+      const jobs = snapshotToJobInfo(limit).filter((job) => (state ? job.state === state : true));
+      json(res, { jobs, metrics: jobRunner.getMetrics() });
+      return true;
+    }
+
+    // GET /api/jobs/:id
+    const jobMatch = path.match(/^\/api\/jobs\/([^/]+)$/);
+    if (jobMatch && method === 'GET') {
+      const snap = jobRunner.get(jobMatch[1]);
+      if (!snap) {
+        notFound(res);
+        return true;
+      }
+      json(res, {
+        job: {
+          jobId: snap.jobId,
+          name: snap.name,
+          lane: snap.lane,
+          state: snap.state,
+          createdAt: snap.createdAt,
+          startedAt: snap.startedAt,
+          endedAt: snap.endedAt,
+          parentJobId: snap.parentJobId,
+          rootJobId: snap.rootJobId,
+          progress: snap.progress,
+          resultSummary: snap.resultSummary,
+          error: snap.error,
+          origin: snap.origin,
+        },
+      });
+      return true;
+    }
+
+    // GET /api/fleet/summary
+    if (path === '/api/fleet/summary' && method === 'GET') {
+      json(res, buildFleetSummary());
+      return true;
+    }
 
   // GET /api/usage/:chatId
   const usageMatch = path.match(/^\/api\/usage\/(-?\d+)$/);
