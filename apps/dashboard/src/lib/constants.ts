@@ -78,10 +78,14 @@ export const EVENT_COLORS: Record<string, string> = {
   "job:idempotency": "var(--muted)",
 };
 
-function getDashboardUrl(name: "NEXT_PUBLIC_WS_URL" | "NEXT_PUBLIC_API_URL", fallback: string) {
-  const value = process.env[name]?.trim();
-  if (value) {
-    return value;
+function getDashboardUrl(
+  name: "NEXT_PUBLIC_WS_URL" | "NEXT_PUBLIC_API_URL",
+  value: string | undefined,
+  fallback: string
+) {
+  const resolved = value?.trim();
+  if (resolved) {
+    return resolved;
   }
   if (process.env.NODE_ENV === "production") {
     throw new Error(
@@ -91,5 +95,13 @@ function getDashboardUrl(name: "NEXT_PUBLIC_WS_URL" | "NEXT_PUBLIC_API_URL", fal
   return fallback;
 }
 
-export const WS_URL = getDashboardUrl("NEXT_PUBLIC_WS_URL", "ws://localhost:3001/ws");
-export const API_URL = getDashboardUrl("NEXT_PUBLIC_API_URL", "http://localhost:3001");
+export const WS_URL = getDashboardUrl(
+  "NEXT_PUBLIC_WS_URL",
+  process.env.NEXT_PUBLIC_WS_URL,
+  "ws://localhost:3001/ws"
+);
+export const API_URL = getDashboardUrl(
+  "NEXT_PUBLIC_API_URL",
+  process.env.NEXT_PUBLIC_API_URL,
+  "http://localhost:3001"
+);
