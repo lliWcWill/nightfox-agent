@@ -128,6 +128,8 @@ interface DashboardState {
 
   activePanel: string;
   setActivePanel: (panel: string) => void;
+  selectedJobId: string | null;
+  setSelectedJobId: (jobId: string | null) => void;
   autoScroll: boolean;
   toggleAutoScroll: () => void;
   eventFilter: string;
@@ -255,6 +257,8 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
 
   activePanel: "fleet",
   setActivePanel: (panel) => set({ activePanel: panel }),
+  selectedJobId: null,
+  setSelectedJobId: (jobId) => set({ selectedJobId: jobId }),
   autoScroll: true,
   toggleAutoScroll: () => set((state) => ({ autoScroll: !state.autoScroll })),
   eventFilter: "",

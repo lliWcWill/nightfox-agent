@@ -246,7 +246,8 @@ function JobRow({
 export function JobRuns() {
   const jobs = useDashboardStore((s) => s.jobs);
   const metrics = useDashboardStore((s) => s.jobMetrics);
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const selectedJobId = useDashboardStore((s) => s.selectedJobId);
+  const setSelectedJobId = useDashboardStore((s) => s.setSelectedJobId);
 
   const active = useMemo(() => jobs.filter((job) => job.state === "queued" || job.state === "running"), [jobs]);
   const recent = useMemo(() => jobs.filter((job) => job.state !== "queued" && job.state !== "running").slice(0, 8), [jobs]);
