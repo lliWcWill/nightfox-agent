@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
-import { JobEvent, JobHandler, JobHandoff, JobLane, JobOrigin, JobResumeSpec, JobRunContext, JobSnapshot } from './job-types';
+import { JobEvent, JobHandler, JobHandoff, JobLane, JobOrigin, JobResumeSpec, JobRunContext, JobSnapshot, JobReturnRoute } from './job-types';
 import { JobRegistry } from './job-registry';
 
 type EnqueueOpts = {
@@ -15,6 +15,7 @@ type EnqueueOpts = {
   rootJobId?: string;
   resumeSpec?: JobResumeSpec;
   handoff?: JobHandoff;
+  returnRoute?: JobReturnRoute;
 };
 
 type RetrySpec = {
@@ -28,6 +29,7 @@ type RetrySpec = {
   rootJobId?: string;
   resumeSpec?: JobResumeSpec;
   handoff?: JobHandoff;
+  returnRoute?: JobReturnRoute;
 };
 
 type QueuedJob = EnqueueOpts & {
@@ -121,6 +123,7 @@ export class JobRunner {
       rootJobId: spec.rootJobId,
       resumeSpec: spec.resumeSpec,
       handoff: spec.handoff,
+      returnRoute: spec.returnRoute,
     });
   }
 
@@ -234,6 +237,7 @@ export class JobRunner {
       rootJobId: spec.rootJobId,
       resumeSpec: spec.resumeSpec,
       handoff: spec.handoff,
+      returnRoute: spec.returnRoute,
     });
   }
 
@@ -243,6 +247,10 @@ export class JobRunner {
 
   listRecent(limit = 10) {
     return this.registry.listRecent(limit);
+  }
+
+  listAll() {
+    return this.registry.listRecent(10_000);
   }
 
   isRunning(jobId: string): boolean {

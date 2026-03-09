@@ -1,18 +1,12 @@
 import { ChatInputCommandInteraction } from 'discord.js';
 import { discordChatId, discordSessionId } from '../id-mapper.js';
-import {
-  cancelRequest,
-  clearQueue,
-  isProcessing,
-} from '../../claude/request-queue.js';
+import { cancelChatOperations } from '../../cancel/cancellation-coordinator.js';
 
 /**
  * Handle a slash command interaction to cancel the user's active request and clear queued requests.
  *
- * If a request was cancelled or queued items were cleared, replies ephemerally with "Cancelled."
- * and appends the number of cleared queued requests when applicable. If nothing was active or queued,
- * replies ephemerally with "Nothing to cancel." If a cancel signal was sent but no immediate
- * cancellation or queue clearance occurred, replies ephemerally with "Cancel sent."
+ * Extends cancellation beyond the interactive Claude request queue to include background jobs and
+ * active autonomy objectives tied to the same Discord session/origin.
  *
  * @param interaction - The Discord command interaction to respond to
  */
@@ -23,24 +17,40 @@ export async function handleCancel(interaction: ChatInputCommandInteraction): Pr
     ? [sessionChatId]
     : [sessionChatId, legacyChatId];
 
-  const wasProcessing = chatIds.some((chatId) => isProcessing(chatId));
-  let cancelled = false;
-  let clearedCount = 0;
+  const result = await cancelChatOperations({
+    chatIds,
+    origin: {
+      channelId: interaction.channelId,
+      threadId: interaction.channel?.isThread() ? interaction.channelId : undefined,
+      userId: interaction.user.id,
+    },
+  });
 
-  for (const chatId of chatIds) {
-    cancelled = (await cancelRequest(chatId)) || cancelled;
-    clearedCount += clearQueue(chatId);
-  }
+  const didAnything = result.cancelledRequests
+    || result.clearedQueuedRequests > 0
+    || result.cancelledJobs.length > 0
+    || result.cancelledObjectives.length > 0;
 
-  if (cancelled || clearedCount > 0) {
-    let message = 'Cancelled.';
-    if (clearedCount > 0) {
-      message += ` (${clearedCount} queued request${clearedCount > 1 ? 's' : ''} cleared)`;
+  if (didAnything) {
+    const details: string[] = [];
+    if (result.clearedQueuedRequests > 0) {
+      details.push(`${result.clearedQueuedRequests} queued request${result.clearedQueuedRequests > 1 ? 's' : ''} cleared`);
     }
-    await interaction.reply({ content: message, ephemeral: true });
-  } else if (!wasProcessing) {
-    await interaction.reply({ content: 'Nothing to cancel.', ephemeral: true });
-  } else {
-    await interaction.reply({ content: 'Cancel sent.', ephemeral: true });
+    if (result.cancelledJobs.length > 0) {
+      details.push(`${result.cancelledJobs.length} background job${result.cancelledJobs.length > 1 ? 's' : ''} cancelled`);
+    }
+    if (result.cancelledObjectives.length > 0) {
+      details.push(`${result.cancelledObjectives.length} objective${result.cancelledObjectives.length > 1 ? 's' : ''} cancelled`);
+    }
+    const suffix = details.length ? ` (${details.join('; ')})` : '';
+    await interaction.reply({ content: `Cancelled.${suffix}`, ephemeral: true });
+    return;
   }
+
+  if (!result.hadProcessing) {
+    await interaction.reply({ content: 'Nothing to cancel.', ephemeral: true });
+    return;
+  }
+
+  await interaction.reply({ content: 'Cancel sent.', ephemeral: true });
 }

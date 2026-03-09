@@ -3,6 +3,8 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { getCachedUsage } from '../claude/agent.js';
 import { config } from '../config.js';
 import { jobRunner } from '../jobs/index.js';
+import { objectiveStore } from '../autonomy/index.js';
+import { cancelObjectiveById } from '../cancel/cancellation-coordinator.js';
 import type {
   DashboardTask,
   AgentStatusInfo,
@@ -28,13 +30,6 @@ export const queueStates: Map<number, QueueInfo> = new Map();
 const TASKS_FILE = getHomeStatePath('dashboard-tasks.json');
 const TASKS_LOAD_FILE = resolveExistingHomeStatePath('dashboard-tasks.json');
 
-/**
- * Loads persisted dashboard tasks from the tasks file in the user's home directory.
- *
- * Attempts to read and parse the tasks JSON file; if the file is missing or contains invalid JSON, returns an empty array.
- *
- * @returns An array of stored DashboardTask objects, or an empty array if none are available.
- */
 function loadTasks(): DashboardTask[] {
   if (!existsSync(TASKS_LOAD_FILE)) return [];
   try {
@@ -44,14 +39,6 @@ function loadTasks(): DashboardTask[] {
   }
 }
 
-/**
- * Persist the provided dashboard tasks to the user's tasks file on disk.
- *
- * Ensures the tasks directory exists and writes the tasks array as pretty-printed JSON
- * to the configured TASKS_FILE path.
- *
- * @param tasks - The array of DashboardTask objects to persist
- */
 function saveTasks(tasks: DashboardTask[]): void {
   ensureHomeStateDir();
   writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
@@ -158,15 +145,7 @@ export function recordQueueDequeue(params: {
   queueStates.set(params.chatId, next);
 }
 
-// ── Request helpers ─────────────────────────────────────────────────
-
-const MAX_BODY = 1024 * 1024; /**
- * Parses and returns the JSON body of an incoming HTTP request, enforcing a 1 MB limit.
- *
- * @param req - The incoming HTTP request to read the body from
- * @returns The parsed JSON value, or an empty object if the body is missing or contains invalid JSON
- * @throws If the request emits an error or if the body size exceeds 1 MB
- */
+const MAX_BODY = 1024 * 1024;
 
 function parseBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -188,13 +167,6 @@ function parseBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-/**
- * Send a JSON response with common CORS headers and the specified status code.
- *
- * @param res - HTTP ServerResponse to write the response to
- * @param data - Value to serialize as the JSON response body
- * @param status - HTTP status code to send (defaults to 200)
- */
 function json(res: ServerResponse, data: unknown, status = 200): void {
   res.writeHead(status, {
     'Content-Type': 'application/json',
@@ -205,30 +177,15 @@ function json(res: ServerResponse, data: unknown, status = 200): void {
   res.end(JSON.stringify(data));
 }
 
-/**
- * Send a 404 JSON response with a standard not-found error payload.
- *
- * @param res - HTTP server response to write the status and body to
- */
 function notFound(res: ServerResponse): void {
   json(res, { error: 'Not found' }, 404);
 }
-
-/**
- * Handle incoming HTTP requests for the dashboard API and send responses for matched routes.
- *
- * Supported routes include CORS preflight, sessions, agents status, queue, usage by chatId,
- * config, voice sessions, and CRUD operations for persisted dashboard tasks.
- *
- * @returns `true` if the request was handled by this API handler (a response was sent), `false` otherwise.
- */
 
 export async function handleApiRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = new URL(req.url || '/', `http://${req.headers.host}`);
   const path = url.pathname;
   const method = req.method || 'GET';
 
-  // CORS preflight
   if (method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
@@ -239,76 +196,101 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     return true;
   }
 
-  // Only handle /api/* routes
   if (!path.startsWith('/api/')) return false;
 
-  // GET /api/sessions
   if (path === '/api/sessions' && method === 'GET') {
-    // sessionManager doesn't expose all sessions directly, but we can return
-    // what's available through session history
     const sessions: Record<string, unknown>[] = [];
-    // Return empty for now — the eventBus session events give real-time data
     json(res, { sessions });
     return true;
   }
 
-  // GET /api/agents/status
-    if (path === '/api/agents/status' && method === 'GET') {
-      json(res, { agents: [...agentStatuses.values()] });
+  if (path === '/api/agents/status' && method === 'GET') {
+    json(res, { agents: [...agentStatuses.values()] });
+    return true;
+  }
+
+  if (path === '/api/queue' && method === 'GET') {
+    json(res, { queues: listQueues() });
+    return true;
+  }
+
+  if (path === '/api/jobs' && method === 'GET') {
+    const limitRaw = parseInt(url.searchParams.get('limit') ?? '50', 10);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 200)) : 50;
+    const state = url.searchParams.get('state');
+    const jobs = snapshotToJobInfo(limit).filter((job) => (state ? job.state === state : true));
+    json(res, { jobs, metrics: jobRunner.getMetrics() });
+    return true;
+  }
+
+  const jobMatch = path.match(/^\/api\/jobs\/([^/]+)$/);
+  if (jobMatch && method === 'GET') {
+    const snap = jobRunner.get(jobMatch[1]);
+    if (!snap) {
+      notFound(res);
       return true;
     }
+    json(res, {
+      job: {
+        jobId: snap.jobId,
+        name: snap.name,
+        lane: snap.lane,
+        state: snap.state,
+        createdAt: snap.createdAt,
+        startedAt: snap.startedAt,
+        endedAt: snap.endedAt,
+        parentJobId: snap.parentJobId,
+        rootJobId: snap.rootJobId,
+        progress: snap.progress,
+        resultSummary: snap.resultSummary,
+        error: snap.error,
+        origin: snap.origin,
+      },
+    });
+    return true;
+  }
 
-    // GET /api/queue
-    if (path === '/api/queue' && method === 'GET') {
-      json(res, { queues: listQueues() });
+  if (path === '/api/objectives' && method === 'GET') {
+    const state = url.searchParams.get('state');
+    const mode = url.searchParams.get('mode');
+    const chatIdParam = url.searchParams.get('chatId');
+    const parsedChatId = chatIdParam ? parseInt(chatIdParam, 10) : null;
+    const objectives = objectiveStore.list().filter((objective) => (
+      (state ? objective.state === state : true)
+      && (mode ? objective.mode === mode : true)
+      && (parsedChatId !== null && Number.isFinite(parsedChatId) ? objective.chatId === parsedChatId : true)
+    ));
+    json(res, { objectives });
+    return true;
+  }
+
+  const objectiveCancelMatch = path.match(/^\/api\/objectives\/([^/]+)\/cancel$/);
+  if (objectiveCancelMatch && method === 'POST') {
+    const canceled = await cancelObjectiveById(objectiveCancelMatch[1]);
+    if (!canceled) {
+      notFound(res);
       return true;
     }
+    json(res, { objective: canceled.objective, canceled: true, cancelledJobs: canceled.cancelledJobs });
+    return true;
+  }
 
-    // GET /api/jobs
-    if (path === '/api/jobs' && method === 'GET') {
-      const limitRaw = parseInt(url.searchParams.get('limit') ?? '50', 10);
-      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 200)) : 50;
-      const state = url.searchParams.get('state');
-      const jobs = snapshotToJobInfo(limit).filter((job) => (state ? job.state === state : true));
-      json(res, { jobs, metrics: jobRunner.getMetrics() });
+  const objectiveMatch = path.match(/^\/api\/objectives\/([^/]+)$/);
+  if (objectiveMatch && method === 'GET') {
+    const objective = objectiveStore.get(objectiveMatch[1]);
+    if (!objective) {
+      notFound(res);
       return true;
     }
+    json(res, { objective });
+    return true;
+  }
 
-    // GET /api/jobs/:id
-    const jobMatch = path.match(/^\/api\/jobs\/([^/]+)$/);
-    if (jobMatch && method === 'GET') {
-      const snap = jobRunner.get(jobMatch[1]);
-      if (!snap) {
-        notFound(res);
-        return true;
-      }
-      json(res, {
-        job: {
-          jobId: snap.jobId,
-          name: snap.name,
-          lane: snap.lane,
-          state: snap.state,
-          createdAt: snap.createdAt,
-          startedAt: snap.startedAt,
-          endedAt: snap.endedAt,
-          parentJobId: snap.parentJobId,
-          rootJobId: snap.rootJobId,
-          progress: snap.progress,
-          resultSummary: snap.resultSummary,
-          error: snap.error,
-          origin: snap.origin,
-        },
-      });
-      return true;
-    }
+  if (path === '/api/fleet/summary' && method === 'GET') {
+    json(res, buildFleetSummary());
+    return true;
+  }
 
-    // GET /api/fleet/summary
-    if (path === '/api/fleet/summary' && method === 'GET') {
-      json(res, buildFleetSummary());
-      return true;
-    }
-
-  // GET /api/usage/:chatId
   const usageMatch = path.match(/^\/api\/usage\/(-?\d+)$/);
   if (usageMatch && method === 'GET') {
     const chatId = parseInt(usageMatch[1], 10);
@@ -317,9 +299,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     return true;
   }
 
-  // GET /api/config
   if (path === '/api/config' && method === 'GET') {
-    // Return safe config values (no API keys)
     json(res, {
       botName: config.BOT_NAME,
       botMode: config.BOT_MODE,
@@ -332,14 +312,11 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     return true;
   }
 
-  // GET /api/voice/sessions
   if (path === '/api/voice/sessions' && method === 'GET') {
-    // Voice sessions tracked via eventBus events
     json(res, { sessions: [] });
     return true;
   }
 
-  // POST /api/tasks
   if (path === '/api/tasks' && method === 'POST') {
     const body = await parseBody(req) as Partial<DashboardTask>;
     const tasks = loadTasks();
@@ -360,13 +337,11 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     return true;
   }
 
-  // GET /api/tasks
   if (path === '/api/tasks' && method === 'GET') {
     json(res, { tasks: loadTasks() });
     return true;
   }
 
-  // PUT /api/tasks/:id
   const taskMatch = path.match(/^\/api\/tasks\/(task_\w+)$/);
   if (taskMatch && method === 'PUT') {
     const taskId = taskMatch[1];
@@ -380,7 +355,6 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     return true;
   }
 
-  // DELETE /api/tasks/:id
   if (taskMatch && method === 'DELETE') {
     const taskId = taskMatch[1];
     const tasks = loadTasks();
