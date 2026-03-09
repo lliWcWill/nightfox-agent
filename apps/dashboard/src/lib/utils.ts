@@ -25,6 +25,38 @@ export function truncate(str: string, max: number): string {
   return str.length > max ? str.slice(0, max) + "..." : str;
 }
 
+export function formatStructuredValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return "";
+    }
+
+    if (
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    ) {
+      try {
+        return JSON.stringify(JSON.parse(trimmed), null, 2);
+      } catch {
+        return value;
+      }
+    }
+
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 // ── Event Description (shared by action-log + copy formatters) ──────
 
 export function eventDescription(ev: DashboardEvent): string {
@@ -41,7 +73,9 @@ export function eventDescription(ev: DashboardEvent): string {
     case "agent:tool_start":
       return `Tool: ${p.toolName}`;
     case "agent:tool_end":
-      return `Tool completed`;
+      return p.status === "error"
+        ? `Tool failed: ${p.toolName || "unknown"}`
+        : `Tool completed: ${p.toolName || "unknown"}`;
     case "agent:complete":
       return `Completed (${(durationMs / 1000).toFixed(1)}s) — ${toolsUsed} tools`;
     case "agent:error":

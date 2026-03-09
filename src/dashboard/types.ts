@@ -25,6 +25,7 @@ export interface AgentProgressEvent {
 export interface AgentToolStartEvent {
   chatId: number;
   toolName: string;
+  callId?: string;
   input?: Record<string, unknown>;
   timestamp: number;
 }
@@ -32,6 +33,11 @@ export interface AgentToolStartEvent {
 export interface AgentToolEndEvent {
   chatId: number;
   toolName: string;
+  callId?: string;
+  status?: 'completed' | 'error';
+  output?: unknown;
+  error?: string;
+  durationMs?: number;
   timestamp: number;
 }
 

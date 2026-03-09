@@ -22,6 +22,7 @@ import { config } from '../config.js';
 import { sessionManager } from '../claude/session-manager.js';
 import { setActiveQuery, isCancelled } from '../claude/request-queue.js';
 import { eventBus } from '../dashboard/event-bus.js';
+import { sanitizeDashboardValue } from '../dashboard/payload-utils.js';
 import { contextMonitor } from '../claude/context-monitor.js';
 import { getSystemPrompt, stripReasoningSummary } from './system-prompt.js';
 
@@ -106,13 +107,14 @@ export class ClaudeProvider implements AgentProvider {
 
     history.push({ role: 'user', content: prompt });
 
-    let fullText = '';
-    const toolsUsed: string[] = [];
-    let gotResult = false;
-    let resultUsage: AgentUsage | undefined;
-    let compactionEvent: { trigger: 'manual' | 'auto'; preTokens: number } | undefined;
-    let initEvent: { model: string; sessionId: string } | undefined;
-    let agentStartTime = Date.now();
+      let fullText = '';
+      const toolsUsed: string[] = [];
+      let gotResult = false;
+      let resultUsage: AgentUsage | undefined;
+      let compactionEvent: { trigger: 'manual' | 'auto'; preTokens: number } | undefined;
+      let initEvent: { model: string; sessionId: string } | undefined;
+      let agentStartTime = Date.now();
+      const pendingToolUses: Array<{ callId?: string; toolName: string }> = [];
 
     const permissionMode = getPermissionMode(command);
     const effectiveModel = model || this.chatModels.get(chatId) || 'opus';
@@ -259,29 +261,37 @@ export class ClaudeProvider implements AgentProvider {
 
         logAt('trace', '[Claude] Message type:', responseMessage.type);
 
-        if (responseMessage.type === 'assistant') {
-          logAt('verbose', '[Claude] Assistant content blocks:', responseMessage.message.content.length);
-          for (const block of responseMessage.message.content) {
-            logAt('trace', '[Claude] Block type:', block.type);
-            if (block.type === 'text') {
-              fullText += block.text;
-              onProgress?.(fullText);
-            } else if (block.type === 'tool_use') {
-              const toolInput = 'input' in block ? block.input as Record<string, unknown> : {};
-              const inputSummary = toolInput.command
-                ? String(toolInput.command).substring(0, 150)
-                : toolInput.pattern
-                  ? String(toolInput.pattern)
-                  : toolInput.file_path
-                    ? String(toolInput.file_path)
-                    : '';
-              logAt('verbose', `[Claude] Tool: ${block.name}${inputSummary ? ` → ${inputSummary}` : ''}`);
-              toolsUsed.push(block.name);
-              eventBus.emit('agent:tool_start', { chatId, toolName: block.name, input: toolInput, timestamp: Date.now() });
-              onToolStart?.(block.name, toolInput);
+          if (responseMessage.type === 'assistant') {
+            logAt('verbose', '[Claude] Assistant content blocks:', responseMessage.message.content.length);
+            for (const block of responseMessage.message.content) {
+              logAt('trace', '[Claude] Block type:', block.type);
+              if (block.type === 'text') {
+                fullText += block.text;
+                onProgress?.(fullText);
+              } else if (block.type === 'tool_use') {
+                const toolInput = 'input' in block ? block.input as Record<string, unknown> : {};
+                const callId = 'id' in block && typeof block.id === 'string' ? block.id : undefined;
+                const inputSummary = toolInput.command
+                  ? String(toolInput.command).substring(0, 150)
+                  : toolInput.pattern
+                    ? String(toolInput.pattern)
+                    : toolInput.file_path
+                      ? String(toolInput.file_path)
+                      : '';
+                logAt('verbose', `[Claude] Tool: ${block.name}${inputSummary ? ` → ${inputSummary}` : ''}`);
+                toolsUsed.push(block.name);
+                pendingToolUses.push({ callId, toolName: block.name });
+                eventBus.emit('agent:tool_start', {
+                  chatId,
+                  toolName: block.name,
+                  callId,
+                  input: toolInput,
+                  timestamp: Date.now(),
+                });
+                onToolStart?.(block.name, toolInput);
+              }
             }
-          }
-        } else if (responseMessage.type === 'system') {
+          } else if (responseMessage.type === 'system') {
           if (responseMessage.subtype === 'compact_boundary') {
             const cbMsg = responseMessage as SDKCompactBoundaryMessage;
             compactionEvent = {
@@ -308,7 +318,29 @@ export class ClaudeProvider implements AgentProvider {
           logAt('verbose', `[Claude] Tool progress: ${responseMessage.tool_name}`, responseMessage);
         } else if (responseMessage.type === 'tool_use_summary') {
           logAt('verbose', '[Claude] Tool use summary', responseMessage);
-          eventBus.emit('agent:tool_end', { chatId, toolName: '', timestamp: Date.now() });
+          const toolUseIds = responseMessage.preceding_tool_use_ids.filter(
+            (toolUseId): toolUseId is string => typeof toolUseId === 'string' && toolUseId.length > 0,
+          );
+          let toolIndex = -1;
+          if (toolUseIds.length > 0) {
+            toolIndex = pendingToolUses.findIndex((entry) =>
+              entry.callId ? toolUseIds.includes(entry.callId) : false,
+            );
+          }
+          if (toolIndex === -1 && pendingToolUses.length > 0) {
+            toolIndex = 0;
+          }
+          const toolCall = toolIndex >= 0 ? pendingToolUses.splice(toolIndex, 1)[0] : undefined;
+          eventBus.emit('agent:tool_end', {
+            chatId,
+            toolName: toolCall?.toolName || 'unknown',
+            callId: toolCall?.callId,
+            output: sanitizeDashboardValue({
+              summary: responseMessage.summary,
+              precedingToolUseIds: responseMessage.preceding_tool_use_ids,
+            }),
+            timestamp: Date.now(),
+          });
           onToolEnd?.();
         } else if (responseMessage.type === 'auth_status') {
           logAt('basic', '[Claude] Auth status', responseMessage);

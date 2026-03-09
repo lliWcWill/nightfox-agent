@@ -109,7 +109,10 @@ export interface ToolCallInfo {
   id: string;
   chatId: number | string;
   toolName: string;
+  callId?: string;
   input?: Record<string, unknown>;
+  output?: unknown;
+  error?: string;
   status: "running" | "completed" | "error";
   startedAt: number;
   completedAt?: number;

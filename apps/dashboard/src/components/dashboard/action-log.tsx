@@ -1,8 +1,7 @@
 "use client";
 
-import { useRef, useEffect, useState, useCallback, useMemo } from "react";
+import { useRef, useEffect, useState, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { GlassPanel } from "@/components/glass/glass-panel";
 import { GlassBadge } from "@/components/glass/glass-badge";
 import { useDashboardStore } from "@/hooks/use-store";
@@ -78,20 +77,14 @@ function CopyButton({
 
 function ConversationBubble({
   event,
-  onMeasure,
 }: {
   event: DashboardEvent;
-  onMeasure?: () => void;
 }) {
   const isUser = event.type === "groq:complete";
   const text = String(event.payload.text || "");
   const Icon = isUser ? Mic : Brain;
   const label = isUser ? "You" : "Gemini";
   const accentColor = isUser ? "var(--agent-groq)" : "var(--agent-gemini)";
-
-  useEffect(() => {
-    onMeasure?.();
-  }, [onMeasure]);
 
   return (
     <div
@@ -147,10 +140,8 @@ function ConversationBubble({
 
 function EventRow({
   event,
-  onToggle,
 }: {
   event: DashboardEvent;
-  onToggle?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const color = EVENT_COLORS[event.type] || "var(--muted)";
@@ -192,18 +183,17 @@ function EventRow({
 
       <AnimatePresence>
         {expanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="overflow-hidden"
-            onAnimationComplete={() => onToggle?.()}
-          >
-            <pre className="mt-2 ml-6 max-h-48 overflow-auto rounded-lg bg-surface-0/50 p-3 font-mono text-[11px] text-muted-foreground">
-              {JSON.stringify(event.payload, null, 2)}
-            </pre>
-          </motion.div>
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="overflow-hidden"
+            >
+              <pre className="mt-2 ml-6 max-h-56 overflow-auto rounded-lg bg-surface-0/50 p-3 font-mono text-[11px] whitespace-pre-wrap break-words text-muted-foreground">
+                {JSON.stringify(event.payload, null, 2)}
+              </pre>
+            </motion.div>
         )}
       </AnimatePresence>
     </div>
@@ -214,23 +204,19 @@ function EventRow({
 
 function EventRenderer({
   event,
-  onToggle,
 }: {
   event: DashboardEvent;
-  onToggle?: () => void;
 }) {
   // Conversation bubbles for text events
   if (event.type === "voice:text" || event.type === "groq:complete") {
-    return <ConversationBubble event={event} onMeasure={onToggle} />;
+    return <ConversationBubble event={event} />;
   }
-  return <EventRow event={event} onToggle={onToggle} />;
+  return <EventRow event={event} />;
 }
 
 // ── Action Log ───────────────────────────────────────────────────────
 
 export function ActionLog({ compact = false }: { compact?: boolean }) {
-  "use no memo";
-
   const events = useDashboardStore((s) => s.events);
   const eventFilter = useDashboardStore((s) => s.eventFilter);
   const setEventFilter = useDashboardStore((s) => s.setEventFilter);
@@ -256,26 +242,16 @@ export function ActionLog({ compact = false }: { compact?: boolean }) {
         .map(({ event }) => event)
     : events;
 
-  const virtualizer = useVirtualizer({
-    count: filtered.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 44,
-    overscan: 15,
-  });
-
-  // Re-measure when rows expand/collapse
-  const handleRowToggle = useCallback(() => {
-    virtualizer.measure();
-  }, [virtualizer]);
-
-  // Auto-scroll to bottom (defer to next frame so virtualizer finishes measuring)
+  // Auto-scroll after the DOM has laid out the latest rows.
   useEffect(() => {
-    if (autoScroll && filtered.length > 0) {
+    if (autoScroll && filtered.length > 0 && parentRef.current) {
       requestAnimationFrame(() => {
-        virtualizer.scrollToIndex(filtered.length - 1, { align: "end" });
+        if (parentRef.current) {
+          parentRef.current.scrollTop = parentRef.current.scrollHeight;
+        }
       });
     }
-  }, [filtered.length, autoScroll, virtualizer]);
+  }, [filtered.length, autoScroll]);
 
   const handleCopyAll = async () => {
     const ok = await copyToClipboard(formatAllEventsForCopy(filtered));
@@ -349,42 +325,22 @@ export function ActionLog({ compact = false }: { compact?: boolean }) {
         </div>
       </div>
 
-      {/* Virtualized list */}
-      <div ref={parentRef} className="min-h-0 flex-1 overflow-auto">
-        {filtered.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground/50">
-            Waiting for events...
-          </div>
-        ) : (
-          <div
-            style={{
-              height: `${virtualizer.getTotalSize()}px`,
-              width: "100%",
-              position: "relative",
-            }}
-          >
-            {virtualizer.getVirtualItems().map((virtualItem) => (
-              <div
-                key={virtualItem.key}
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  width: "100%",
-                  transform: `translateY(${virtualItem.start}px)`,
-                }}
-                ref={virtualizer.measureElement}
-                data-index={virtualItem.index}
-              >
-                <EventRenderer
-                  event={filtered[virtualItem.index]}
-                  onToggle={handleRowToggle}
-                />
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+        <div
+          ref={parentRef}
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        >
+          {filtered.length === 0 ? (
+            <div className="flex h-full items-center justify-center text-sm text-muted-foreground/50">
+              Waiting for events...
+            </div>
+          ) : (
+            <div className="pb-2">
+              {filtered.map((event) => (
+                <EventRenderer key={event.id} event={event} />
+              ))}
+            </div>
+          )}
+        </div>
 
       {/* Footer (hidden in compact mode) */}
       {!compact && (

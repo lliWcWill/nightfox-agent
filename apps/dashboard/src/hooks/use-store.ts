@@ -15,6 +15,7 @@ import type {
 } from "@/lib/types";
 
 const MAX_EVENTS = 500;
+const MAX_TOOL_CALLS = 200;
 
 function upsertQueueList(queues: QueueInfo[], next: QueueInfo): QueueInfo[] {
   const filtered = queues.filter((queue) => queue.chatId !== next.chatId);
@@ -31,7 +32,61 @@ function upsertJobList(jobs: DashboardJobInfo[], next: DashboardJobInfo): Dashbo
       const bTime = b.endedAt ?? b.startedAt ?? b.createdAt;
       return bTime - aTime;
     })
-    .slice(0, MAX_EVENTS);
+      .slice(0, MAX_EVENTS);
+}
+
+function upsertToolCallList(toolCalls: ToolCallInfo[], next: ToolCallInfo): ToolCallInfo[] {
+  if (next.callId) {
+    const existingIndex = toolCalls.findIndex((tc) => tc.callId === next.callId);
+    if (existingIndex !== -1) {
+      const updated = [...toolCalls];
+      updated[existingIndex] = { ...updated[existingIndex], ...next };
+      return updated.slice(-MAX_TOOL_CALLS);
+    }
+  }
+
+  return [...toolCalls, next].slice(-MAX_TOOL_CALLS);
+}
+
+interface ToolCallCompletion {
+  chatId: number | string;
+  toolName?: string;
+  callId?: string;
+  output?: unknown;
+  error?: string;
+  status?: ToolCallInfo["status"];
+  completedAt?: number;
+}
+
+function findToolCallIndex(toolCalls: ToolCallInfo[], completion: ToolCallCompletion): number {
+  if (completion.callId) {
+    for (let i = toolCalls.length - 1; i >= 0; i -= 1) {
+      if (toolCalls[i]?.callId === completion.callId) {
+        return i;
+      }
+    }
+  }
+
+  for (let i = toolCalls.length - 1; i >= 0; i -= 1) {
+    const toolCall = toolCalls[i];
+    if (!toolCall || String(toolCall.chatId) !== String(completion.chatId)) {
+      continue;
+    }
+
+    if (
+      completion.toolName &&
+      toolCall.toolName &&
+      toolCall.toolName !== completion.toolName
+    ) {
+      continue;
+    }
+
+    if (toolCall.status === "running") {
+      return i;
+    }
+  }
+
+  return -1;
 }
 
 interface DashboardState {
@@ -43,7 +98,7 @@ interface DashboardState {
 
   toolCalls: ToolCallInfo[];
   addToolCall: (tc: ToolCallInfo) => void;
-  completeToolCall: (chatId: number | string) => void;
+  completeToolCall: (completion: ToolCallCompletion) => void;
 
   queues: QueueInfo[];
   jobs: DashboardJobInfo[];
@@ -104,23 +159,55 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
 
   events: [],
   addEvent: (event) =>
-    set((state) => ({
-      events: [...state.events, event].slice(-MAX_EVENTS),
-    })),
-
+      set((state) => ({
+        events: [...state.events, event].slice(-MAX_EVENTS),
+      })),
+  
   toolCalls: [],
   addToolCall: (tc) =>
     set((state) => ({
-      toolCalls: [...state.toolCalls, tc],
+      toolCalls: upsertToolCallList(state.toolCalls, tc),
     })),
-  completeToolCall: (chatId) =>
-    set((state) => ({
-      toolCalls: state.toolCalls.map((tc) =>
-        String(tc.chatId) === String(chatId) && tc.status === "running"
-          ? { ...tc, status: "completed" as const, completedAt: Date.now() }
-          : tc
-      ),
-    })),
+  completeToolCall: (completion) =>
+    set((state) => {
+      const index = findToolCallIndex(state.toolCalls, completion);
+      const completedAt = completion.completedAt ?? Date.now();
+      const nextStatus =
+        completion.status ?? (completion.error ? "error" : "completed");
+
+      if (index === -1) {
+        return {
+          toolCalls: upsertToolCallList(state.toolCalls, {
+            id:
+              completion.callId ??
+              `tool_${completedAt}_${Math.random().toString(36).slice(2, 6)}`,
+            callId: completion.callId,
+            chatId: completion.chatId,
+            toolName: completion.toolName || "unknown",
+            input: undefined,
+            output: completion.output,
+            error: completion.error,
+            status: nextStatus,
+            startedAt: completedAt,
+            completedAt,
+          }),
+        };
+      }
+
+      const nextToolCalls = [...state.toolCalls];
+      const existing = nextToolCalls[index];
+      nextToolCalls[index] = {
+        ...existing,
+        callId: completion.callId ?? existing.callId,
+        toolName: completion.toolName || existing.toolName,
+        output: completion.output ?? existing.output,
+        error: completion.error ?? existing.error,
+        status: nextStatus,
+        completedAt,
+      };
+
+      return { toolCalls: nextToolCalls };
+    }),
 
   queues: [],
   jobs: [],
@@ -184,20 +271,34 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
         });
         break;
 
-      case "agent:tool_start":
-        state.addToolCall({
-          id: `tool_${ts}_${Math.random().toString(36).slice(2, 6)}`,
-          chatId: payload.chatId as number,
-          toolName: payload.toolName as string,
-          input: payload.input as Record<string, unknown>,
-          status: "running",
-          startedAt: ts,
-        });
-        break;
+        case "agent:tool_start":
+          state.addToolCall({
+            id:
+              (payload.callId as string | undefined) ??
+              `tool_${ts}_${Math.random().toString(36).slice(2, 6)}`,
+            chatId: payload.chatId as number,
+            toolName: payload.toolName as string,
+            callId: payload.callId as string | undefined,
+            input: payload.input as Record<string, unknown>,
+            status: "running",
+            startedAt: ts,
+          });
+          break;
 
-      case "agent:tool_end":
-        state.completeToolCall(payload.chatId as number);
-        break;
+        case "agent:tool_end":
+          state.completeToolCall({
+            chatId: payload.chatId as number,
+            toolName: payload.toolName as string | undefined,
+            callId: payload.callId as string | undefined,
+            output: payload.output,
+            error: payload.error as string | undefined,
+            status:
+              payload.status === "error" || payload.error
+                ? "error"
+                : "completed",
+            completedAt: ts,
+          });
+          break;
 
       case "agent:complete":
         state.updateAgent("claude", {
@@ -207,13 +308,19 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
         });
         break;
 
-      case "agent:error":
-        state.updateAgent("claude", {
-          status: "error",
-          currentActivity: (payload.error as string)?.slice(0, 80),
-          lastActivity: ts,
-        });
-        break;
+        case "agent:error":
+          state.updateAgent("claude", {
+            status: "error",
+            currentActivity: (payload.error as string)?.slice(0, 80),
+            lastActivity: ts,
+          });
+          state.completeToolCall({
+            chatId: payload.chatId as number,
+            error: payload.error as string | undefined,
+            status: "error",
+            completedAt: ts,
+          });
+          break;
 
       case "voice:open":
         state.updateAgent("gemini", { status: "ready", lastActivity: ts });
@@ -233,23 +340,24 @@ export const useDashboardStore = create<DashboardState>()((set, get) => ({
         });
         break;
 
-      case "voice:tool_call":
-        state.updateAgent("gemini", {
-          status: "thinking",
-          currentActivity: `Tool: ${payload.toolName}`,
-          lastActivity: ts,
-        });
-        state.addToolCall({
-          id: `vtool_${ts}_${Math.random().toString(36).slice(2, 6)}`,
-          chatId: (payload.chatId as number) ?? "voice",
-          toolName: payload.toolName as string,
-          input:
-            (payload.input as Record<string, unknown>) ??
-            (payload.args as Record<string, unknown>),
-          status: "running",
-          startedAt: ts,
-        });
-        break;
+        case "voice:tool_call":
+          state.updateAgent("gemini", {
+            status: "thinking",
+            currentActivity: `Tool: ${payload.toolName}`,
+            lastActivity: ts,
+          });
+          state.addToolCall({
+            id: `vtool_${ts}_${Math.random().toString(36).slice(2, 6)}`,
+            chatId: (payload.chatId as number) ?? "voice",
+            toolName: payload.toolName as string,
+            callId: payload.callId as string | undefined,
+            input:
+              (payload.input as Record<string, unknown>) ??
+              (payload.args as Record<string, unknown>),
+            status: "running",
+            startedAt: ts,
+          });
+          break;
 
       case "voice:interrupted":
         state.updateAgent("gemini", {
