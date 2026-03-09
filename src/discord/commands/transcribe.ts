@@ -37,7 +37,7 @@ export async function handleTranscribe(interaction: ChatInputCommandInteraction)
   try {
     // Determine extension
     const ext = attachment.name?.match(/\.\w+$/)?.[0] || '.ogg';
-    tempFilePath = path.join(os.tmpdir(), `claudegram_transcribe_${interaction.id}${ext}`);
+    tempFilePath = path.join(os.tmpdir(), `nightfox_transcribe_${interaction.id}${ext}`);
 
     // Check size before download (Groq Whisper max: 25MB)
     const MAX_TRANSCRIBE_SIZE_MB = 25;

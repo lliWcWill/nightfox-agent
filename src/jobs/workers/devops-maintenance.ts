@@ -1,6 +1,7 @@
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { JobHandler } from '../core/job-types';
+import { DISCORD_SERVICE_NAME } from '../../utils/app-paths.js';
 
 const execAsync = promisify(exec);
 
@@ -42,14 +43,14 @@ export const selfUpdateJob = (repoPath: string): JobHandler => {
 
 export const restartDiscordServiceJob = (): JobHandler => {
   return async (ctx) => {
-    await runStep(ctx, process.cwd(), {
-      name: 'service restart',
-      command: 'systemctl --user restart claudegram-discord.service',
-    });
-    await runStep(ctx, process.cwd(), {
-      name: 'service status',
-      command: 'systemctl --user --no-pager --lines=20 status claudegram-discord.service',
-    });
+      await runStep(ctx, process.cwd(), {
+        name: 'service restart',
+        command: `systemctl --user restart ${DISCORD_SERVICE_NAME}`,
+      });
+      await runStep(ctx, process.cwd(), {
+        name: 'service status',
+        command: `systemctl --user --no-pager --lines=20 status ${DISCORD_SERVICE_NAME}`,
+      });
     ctx.progress('done');
     return { exitCode: 0 };
   };
@@ -62,14 +63,14 @@ export const fullSelfRefreshJob = (repoPath: string): JobHandler => {
     await runStep(ctx, repoPath, { name: 'deps', command: 'npm install --include=dev' });
     await runStep(ctx, repoPath, { name: 'typecheck', command: 'npm run typecheck' });
     await runStep(ctx, repoPath, { name: 'build', command: 'npm run build' });
-    await runStep(ctx, process.cwd(), {
-      name: 'service restart',
-      command: 'systemctl --user restart claudegram-discord.service',
-    });
-    await runStep(ctx, process.cwd(), {
-      name: 'service status',
-      command: 'systemctl --user --no-pager --lines=20 status claudegram-discord.service',
-    });
+      await runStep(ctx, process.cwd(), {
+        name: 'service restart',
+        command: `systemctl --user restart ${DISCORD_SERVICE_NAME}`,
+      });
+      await runStep(ctx, process.cwd(), {
+        name: 'service status',
+        command: `systemctl --user --no-pager --lines=20 status ${DISCORD_SERVICE_NAME}`,
+      });
     ctx.progress('done');
     return { exitCode: 0 };
   };

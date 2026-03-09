@@ -20,7 +20,7 @@ import { sanitizeError } from '../../utils/sanitize.js';
 import { isValidImageFile, getFileType } from '../../utils/file-type.js';
 import { type PhotoSize } from 'grammy/types';
 
-const UPLOADS_DIR = '.claudegram/uploads';
+const UPLOADS_DIR = '.nightfox/uploads';
 
 function sanitizeFileName(name: string): string {
   return path.basename(name).replace(/[^a-zA-Z0-9._-]/g, '_');

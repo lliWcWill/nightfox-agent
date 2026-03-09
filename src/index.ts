@@ -14,7 +14,7 @@ import { contextMonitor } from './claude/context-monitor.js';
  * SIGINT/SIGTERM handlers to perform a guarded graceful shutdown, and waits until the runner stops.
  */
 async function main() {
-  console.log('🤖 Starting Claudegram...');
+  console.log('🤖 Starting Nightfox...');
   console.log(`📋 Allowed users: ${config.ALLOWED_USER_IDS.join(', ')}`);
   console.log(`📝 Mode: ${config.STREAMING_MODE}`);
 

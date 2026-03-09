@@ -52,7 +52,7 @@ export async function initTelegraph(): Promise<void> {
       telegraphClient = new Telegraph('');
 
       const account = await telegraphClient.createAccount(
-        'Claudegram',
+        'Nightfox',
         'Claude Agent',
         'https://github.com/anthropics/claude-code'
       );

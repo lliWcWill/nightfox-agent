@@ -67,7 +67,7 @@ function safeFileName(title: string): string {
 }
 
 /**
- * Persist transcript to the active project's .claudegram/extract folder.
+ * Persist transcript to the active project's .nightfox/extract folder.
  * Returns both abs + rel path (rel is what the agent should see).
  */
 async function persistTranscriptArtifact(
@@ -80,7 +80,7 @@ async function persistTranscriptArtifact(
     if (!result.transcript || !result.transcript.trim()) return null;
 
     const baseDir = session.workingDirectory;
-    const dir = path.join(baseDir, '.claudegram', 'extract');
+    const dir = path.join(baseDir, '.nightfox', 'extract');
     await fs.promises.mkdir(dir, { recursive: true });
 
     const slug = safeFileName(result.title || 'extract');
@@ -89,7 +89,7 @@ async function persistTranscriptArtifact(
     const absPath = path.join(dir, filename);
     await fs.promises.writeFile(absPath, result.transcript, 'utf-8');
 
-    const relPath = `.claudegram/extract/${filename}`;
+    const relPath = `.nightfox/extract/${filename}`;
     return { relPath, absPath };
   } catch (err) {
     console.warn('[extract] Failed to persist transcript artifact:', err);

@@ -45,6 +45,7 @@ export interface AgentOptions {
   command?: string;
   model?: string;
   platform?: Platform;
+  jobId?: string;
   jobOrigin?: JobOrigin;
   _sparkFallbackTried?: boolean;
 }

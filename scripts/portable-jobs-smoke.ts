@@ -13,7 +13,7 @@ interface JobEvent {
 }
 
 const root = process.cwd();
-const jobsPath = path.join(root, '.claudegram', 'jobs', 'jobs.jsonl');
+const jobsPath = path.join(root, '.nightfox', 'jobs', 'jobs.jsonl');
 const logPath = path.join(root, 'logs', 'discord.prod.log');
 const argJobId = process.argv.find((a) => a.startsWith('--job-id='))?.split('=')[1];
 const argWindow = Number(process.argv.find((a) => a.startsWith('--minutes='))?.split('=')[1] ?? '30');

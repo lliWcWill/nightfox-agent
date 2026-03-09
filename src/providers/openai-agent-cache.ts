@@ -14,16 +14,22 @@ import type { MCPServer } from '@openai/agents';
 
 
 import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
 
 import { config } from '../config.js';
 import { getSystemPrompt } from './system-prompt.js';
 import { createFsuiteTools } from './openai-tools.js';
 import type { Platform } from './types.js';
+import {
+  OPENAI_AGENT_NAME,
+  ensureHomeStateDir,
+  getHomeStateDir,
+  getHomeStatePath,
+  resolveExistingHomeStatePath,
+} from '../utils/app-paths.js';
 
-const HISTORY_DIR = path.join(os.homedir(), '.claudegram');
-const OPENAI_HISTORY_FILE = path.join(HISTORY_DIR, 'openai-history.json');
+const HISTORY_DIR = getHomeStateDir();
+const OPENAI_HISTORY_FILE = getHomeStatePath('openai-history.json');
+const OPENAI_HISTORY_LOAD_FILE = resolveExistingHomeStatePath('openai-history.json');
 
 interface PersistedHistoryData {
   // chatId -> conversationId -> history items
@@ -43,11 +49,11 @@ function safeReadJsonFile<T>(filePath: string, fallback: T): T {
 }
 
 function safeWriteJsonFile(filePath: string, data: unknown): void {
-  try {
-    if (!fs.existsSync(HISTORY_DIR)) {
-      fs.mkdirSync(HISTORY_DIR, { recursive: true });
-    }
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+    try {
+      if (!fs.existsSync(HISTORY_DIR)) {
+        ensureHomeStateDir();
+      }
+      fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
   } catch (err) {
     console.warn(`[AgentCache] Failed to write ${filePath}:`, err);
   }
@@ -71,7 +77,7 @@ export interface ChatAgentState {
 
 export class AgentCache {
   private readonly cache = new Map<number, ChatAgentState>();
-  private persisted: PersistedHistoryData = safeReadJsonFile<PersistedHistoryData>(OPENAI_HISTORY_FILE, { chats: {} });
+  private persisted: PersistedHistoryData = safeReadJsonFile<PersistedHistoryData>(OPENAI_HISTORY_LOAD_FILE, { chats: {} });
 
   /**
    * Returns an existing Agent for the chat, or creates a new one.
@@ -98,12 +104,12 @@ export class AgentCache {
     }
 
     // Create fresh Agent with fsuite tools scoped to cwd + MCP servers
-    const tools = createFsuiteTools(cwd, dangerousMode);
-    const agent = new Agent({
-      name: 'claudegram-openai',
-      instructions: getSystemPrompt(platform, 'openai'),
-      model,
-      tools,
+      const tools = createFsuiteTools(cwd, dangerousMode);
+      const agent = new Agent({
+        name: OPENAI_AGENT_NAME,
+        instructions: getSystemPrompt(platform, 'openai'),
+        model,
+        tools,
       mcpServers,
     });
 

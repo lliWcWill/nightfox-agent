@@ -2,6 +2,7 @@ import { createServer, type Server } from 'http';
 import { attachWebSocket } from './ws-server.js';
 import { handleApiRequest, agentStatuses } from './api.js';
 import { eventBus } from './event-bus.js';
+import { APP_SLUG } from '../utils/app-paths.js';
 
 let server: Server | null = null;
 
@@ -20,7 +21,7 @@ export function startDashboardServer(port: number = 3001): Server {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
       });
-      res.end(JSON.stringify({ status: 'ok', service: 'claudegram-dashboard' }));
+        res.end(JSON.stringify({ status: 'ok', service: `${APP_SLUG}-dashboard` }));
     }
   });
 

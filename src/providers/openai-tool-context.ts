@@ -3,6 +3,7 @@ import type { JobOrigin } from '../jobs/core/job-types.js';
 
 type ToolContext = {
   chatId: number;
+  jobId?: string;
   origin?: JobOrigin;
 };
 
@@ -14,6 +15,10 @@ export async function runWithToolContext<T>(ctx: ToolContext, fn: () => Promise<
 
 export function getCurrentToolChatId(): number | undefined {
   return toolContextStore.getStore()?.chatId;
+}
+
+export function getCurrentToolJobId(): string | undefined {
+  return toolContextStore.getStore()?.jobId;
 }
 
 export function getCurrentToolOrigin(): JobOrigin | undefined {

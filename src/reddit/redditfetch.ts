@@ -103,7 +103,7 @@ function getCredentials(): {
   if (missing.length > 0) {
     throw new Error(
       `Missing Reddit credentials: ${missing.join(', ')}. ` +
-        `Set them in claudegram's .env file.`
+        `Set them in Nightfox's .env file.`
     );
   }
 

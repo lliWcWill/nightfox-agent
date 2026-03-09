@@ -14,7 +14,7 @@ import { jobNotificationOutbox } from '../jobs/job-notification-outbox.js';
 import { delegatedSessionId, discordSessionId } from '../id-mapper.js';
 
 function repoPathFromEnvOrCwd() {
-  return process.env.CLAUDEGRAM_REPO_PATH || process.cwd();
+  return process.env.NIGHTFOX_REPO_PATH || process.env.CLAUDEGRAM_REPO_PATH || process.cwd();
 }
 
 function makeIdempotencyKey(

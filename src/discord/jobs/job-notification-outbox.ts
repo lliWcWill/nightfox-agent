@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { JobSnapshot, JobState } from '../../jobs/core/job-types.js';
+import { getProjectStatePath } from '../../utils/app-paths.js';
 
 type NonRunningState = Exclude<JobState, 'queued' | 'running'>;
 
@@ -52,7 +53,7 @@ export class JobNotificationOutbox {
   private persistPath: string;
 
   constructor(persistPath?: string) {
-    this.persistPath = persistPath ?? path.join(process.cwd(), '.claudegram', 'jobs', 'outbox.json');
+    this.persistPath = persistPath ?? getProjectStatePath(process.cwd(), 'jobs', 'outbox.json');
     this.bootstrapFromDisk();
   }
 

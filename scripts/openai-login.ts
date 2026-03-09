@@ -10,7 +10,7 @@
  *   Then run this script on the server.
  *
  * Opens a browser auth flow with your ChatGPT Pro account.
- * Tokens are saved to ~/.claudegram/openai-auth.json and used
+ * Tokens are saved to ~/.nightfox/openai-auth.json and used
  * automatically by the bot (no API key needed).
  */
 
@@ -22,7 +22,7 @@ async function main() {
     console.log('Login successful!');
     console.log(`  Account ID: ${tokens.chatgpt_account_id}`);
     console.log(`  Expires: ${new Date(tokens.expires_at).toLocaleString()}`);
-    console.log('\nTokens saved to ~/.claudegram/openai-auth.json');
+    console.log('\nTokens saved to ~/.nightfox/openai-auth.json');
     console.log('The bot will use your Pro subscription automatically.');
     process.exit(0);
   } catch (err) {

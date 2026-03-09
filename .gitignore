@@ -6,6 +6,7 @@ dist/
 .telegraph-account.json
 .claude/
 .claudegram/
+.nightfox/
 __pycache__/
 storage_state.json
 output/
@@ -22,6 +23,7 @@ scripts/medium_login.py
 videos/agentTelly_original.mp4
 # runtime job logs
 .claudegram/jobs/
+.nightfox/jobs/
 logs/
 
 # local scratch/backups/artifacts

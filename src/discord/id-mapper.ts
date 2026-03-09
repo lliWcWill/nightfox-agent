@@ -33,3 +33,12 @@ export function discordSessionId(userSnowflake: string, channelSnowflake: string
     .slice(0, 14);
   return -Number(BigInt(`0x${digest}`) % MAX_SAFE);
 }
+
+export function delegatedSessionId(seed: string): number {
+  const digest = crypto
+    .createHash('sha256')
+    .update(`delegated:${seed}`)
+    .digest('hex')
+    .slice(0, 14);
+  return -Number(BigInt(`0x${digest}`) % MAX_SAFE);
+}

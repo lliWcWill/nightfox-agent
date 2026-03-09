@@ -1,8 +1,7 @@
 import { config } from '../config.js';
 import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
 import { z } from 'zod';
+import { ensureHomeStateDir, getHomeStatePath, resolveExistingHomeStatePath } from '../utils/app-paths.js';
 
 // Zod schema for TTS settings
 const ttsSettingsSchema = z.object({
@@ -22,14 +21,12 @@ export interface TTSSettings {
   autoplay: boolean;
 }
 
-const SETTINGS_DIR = path.join(os.homedir(), '.claudegram');
-const SETTINGS_FILE = path.join(SETTINGS_DIR, 'tts-settings.json');
+const SETTINGS_FILE = getHomeStatePath('tts-settings.json');
+const SETTINGS_LOAD_FILE = resolveExistingHomeStatePath('tts-settings.json');
 const chatTTSSettings: Map<number, TTSSettings> = new Map();
 
 function ensureDirectory(): void {
-  if (!fs.existsSync(SETTINGS_DIR)) {
-    fs.mkdirSync(SETTINGS_DIR, { recursive: true });
-  }
+  ensureHomeStateDir();
 }
 
 const GROQ_TTS_VOICES = ['autumn', 'diana', 'hannah', 'austin', 'daniel', 'troy'] as const;
@@ -67,10 +64,10 @@ function normalizeSettings(settings?: Partial<TTSSettings>): TTSSettings {
 
 function loadSettings(): void {
   ensureDirectory();
-  if (!fs.existsSync(SETTINGS_FILE)) return;
+  if (!fs.existsSync(SETTINGS_LOAD_FILE)) return;
 
   try {
-    const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+    const raw = fs.readFileSync(SETTINGS_LOAD_FILE, 'utf-8');
     const parsed = JSON.parse(raw);
 
     // Validate with Zod schema

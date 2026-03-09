@@ -15,6 +15,13 @@ import * as crypto from 'node:crypto';
 import * as http from 'node:http';
 import OpenAI from 'openai';
 import { z } from 'zod';
+import {
+  ensureHomeStateDir,
+  getHomeStateLabel,
+  getHomeStatePath,
+  getLegacyHomeStateLabel,
+  resolveExistingHomeStatePath,
+} from '../utils/app-paths.js';
 
 /** OpenAI's public Codex CLI OAuth client ID. */
 const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
@@ -27,7 +34,7 @@ const SCOPES = 'openid profile email offline_access';
 /** Codex-mode base URL for ChatGPT Pro subscription auth. */
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 
-const TOKEN_FILE = path.join(os.homedir(), '.claudegram', 'openai-auth.json');
+const TOKEN_FILE = getHomeStatePath('openai-auth.json');
 /** Refresh when token expires within this many ms. */
 const REFRESH_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
 /** Fallback expiry when JWT decode fails (8 days). */
@@ -105,8 +112,9 @@ function loadCodexCliTokens(): StoredTokens | undefined {
 function loadStoredTokens(): StoredTokens | undefined {
   // Try our own token file first
   try {
-    if (fs.existsSync(TOKEN_FILE)) {
-      const raw = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+    const tokenFile = resolveExistingHomeStatePath('openai-auth.json');
+    if (fs.existsSync(tokenFile)) {
+      const raw = JSON.parse(fs.readFileSync(tokenFile, 'utf8'));
       const result = tokenSchema.safeParse(raw);
       if (result.success) return result.data;
       console.warn('[OpenAI Auth] Invalid token file, ignoring:', result.error.message);
@@ -126,10 +134,7 @@ function loadStoredTokens(): StoredTokens | undefined {
 }
 
 function saveTokens(tokens: StoredTokens): void {
-  const dir = path.dirname(TOKEN_FILE);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  ensureHomeStateDir();
   fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2), { mode: 0o600 });
 }
 
@@ -493,7 +498,7 @@ export function startOAuthLogin(): Promise<StoredTokens> {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(
           '<h1>Authenticated!</h1>' +
-          '<p>Your ChatGPT Pro account is now linked to Claudegram.</p>' +
+          '<p>Your ChatGPT Pro account is now linked to Nightfox.</p>' +
           '<p>You can close this tab.</p>',
         );
         server.close();

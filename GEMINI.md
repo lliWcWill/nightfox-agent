@@ -1,8 +1,8 @@
-# GEMINI.md - Claudegram Project Context
+# GEMINI.md - Nightfox Project Context
 
 ## Project Overview
 
-Claudegram is a sophisticated Telegram bot that acts as a bridge to the **Claude Code agent** running locally on a machine. It allows users to control their local environment, execute bash commands, read/write files, and perform agentic tasks directly from Telegram.
+Nightfox is a sophisticated Telegram bot that acts as a bridge to the **Claude Code agent** running locally on a machine. It allows users to control their local environment, execute bash commands, read/write files, and perform agentic tasks directly from Telegram.
 
 The project is designed to be more than just an API wrapper; it integrates the full Claude Agent SDK with features like session memory, streaming responses, and specialized tools for Reddit, Medium, and media extraction.
 
@@ -51,7 +51,7 @@ npm start            # Run the compiled code
 ```
 
 ### Bot Control Script
-A helper script is provided in `scripts/claudegram-botctl.sh` for managing the bot process (start, stop, restart, logs) in both dev and prod modes.
+A helper script is provided in `scripts/nightfox-botctl.sh` for managing the bot process (start, stop, restart, logs) in both dev and prod modes.
 
 ## Development Conventions
 
@@ -70,7 +70,7 @@ A helper script is provided in `scripts/claudegram-botctl.sh` for managing the b
 - **Chunking:** `splitMessage` in `src/telegram/markdown.ts` should be used to break long messages while preserving code block integrity.
 
 ### 4. Sessions and Paths
-- Sessions are persisted in `.claudegram/sessions.json`.
+- Sessions are persisted in `.nightfox/sessions.json`.
 - `resolveWorkingDirectory` in `session-manager.ts` handles path portability across different Operating Systems (remaps home directories).
 - Working directories should be validated with `fs.existsSync` before initializing the agent.
 

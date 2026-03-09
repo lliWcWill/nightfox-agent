@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import { resolveBin } from '../utils/resolve-bin.js';
 import { transcribeFile } from '../audio/transcribe.js';
 import { sanitizeError, sanitizePath } from '../utils/sanitize.js';
+import { resolveExistingHomeStatePath } from '../utils/app-paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -284,11 +285,11 @@ async function runInstagrapi(
 /**
  * Checks whether the Instagram helper script and a local Instagrapi session file are available.
  *
- * @returns `true` if both the insta_extract.py script and the `~/.claudegram/instagrapi/session.json` file exist, `false` otherwise.
+ * @returns `true` if both the insta_extract.py script and an Instagram session file exist in Nightfox or the legacy Claudegram home state, `false` otherwise.
  */
 function isInstagrapiAvailable(): boolean {
   return fs.existsSync(INSTA_SCRIPT) &&
-    fs.existsSync(path.join(os.homedir(), '.claudegram', 'instagrapi', 'session.json'));
+    fs.existsSync(resolveExistingHomeStatePath('instagrapi', 'session.json'));
 }
 
 // ── Metadata ───────────────────────────────────────────────────────
@@ -559,7 +560,7 @@ export async function extractMedia(opts: ExtractOptions): Promise<ExtractResult>
   const platform = detectPlatform(url);
   const emoji = platformEmoji(platform);
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claudegram-extract-'));
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nightfox-extract-'));
 
   const result: ExtractResult = {
     platform,
@@ -682,7 +683,7 @@ export function cleanupExtractResult(result: ExtractResult): void {
   for (const p of paths) {
     try {
       const dir = path.dirname(p);
-      if (dir.includes('claudegram-extract-')) {
+      if (dir.includes('nightfox-extract-') || dir.includes('claudegram-extract-')) {
         fs.rmSync(dir, { recursive: true, force: true });
         return;
       }

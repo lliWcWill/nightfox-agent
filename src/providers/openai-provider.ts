@@ -286,7 +286,7 @@ export class OpenAIProvider implements AgentProvider {
 
       // Run with streaming — no session, local history only
       console.log(`[OpenAI] Starting run() with ${input.length} input items`);
-      const result = await runWithToolContext({ chatId, origin: options.jobOrigin }, async () =>
+      const result = await runWithToolContext({ chatId, jobId: options.jobId, origin: options.jobOrigin }, async () =>
         run(agentState.agent, input, {
           stream: true,
           signal: controller.signal,
@@ -297,10 +297,11 @@ export class OpenAIProvider implements AgentProvider {
           // "no limit", the practical approach is to set an extremely high cap.
           //
           // Env overrides:
-          //   - CLAUDEGRAM_MAX_TURNS=unlimited|infinite|none|0  -> huge cap
-          //   - CLAUDEGRAM_MAX_TURNS=<number>                   -> that cap
+          //   - NIGHTFOX_MAX_TURNS=unlimited|infinite|none|0  -> huge cap
+          //   - NIGHTFOX_MAX_TURNS=<number>                   -> that cap
+          //   - CLAUDEGRAM_MAX_TURNS=...                      -> legacy fallback
           maxTurns: (() => {
-            const raw = (process.env.CLAUDEGRAM_MAX_TURNS ?? '').trim().toLowerCase();
+            const raw = (process.env.NIGHTFOX_MAX_TURNS ?? process.env.CLAUDEGRAM_MAX_TURNS ?? '').trim().toLowerCase();
             if (!raw || raw === '0' || raw === 'none' || raw === 'infinite' || raw === 'unlimited') {
               return Number.MAX_SAFE_INTEGER;
             }

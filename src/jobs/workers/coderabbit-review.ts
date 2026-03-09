@@ -4,6 +4,7 @@ import { constants as FS } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { JobRecord } from '../job-manager.js';
+import { getProjectStatePath } from '../../utils/app-paths.js';
 
 export type CodeRabbitPayload = {
   repoPath: string;
@@ -109,7 +110,7 @@ function parseCodeRabbitOutput(raw: CodeRabbitResult): CodeRabbitStructuredResul
 }
 
 async function writeReviewArtifacts(repoPath: string, jobId: string, raw: CodeRabbitResult, parsed: CodeRabbitStructuredResult) {
-  const dir = path.join(repoPath, '.claudegram', 'artifacts', 'jobs', jobId);
+  const dir = getProjectStatePath(repoPath, 'artifacts', 'jobs', jobId);
   await mkdir(dir, { recursive: true });
 
   const resultPath = path.join(dir, 'result.json');

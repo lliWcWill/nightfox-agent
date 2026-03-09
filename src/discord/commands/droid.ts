@@ -76,7 +76,7 @@ export async function handleDroid(interaction: ChatInputCommandInteraction): Pro
         : audioAttachment.contentType?.includes('mp4') ? '.mp4'
         : '.ogg';
 
-      tempFilePath = path.join(os.tmpdir(), `claudegram_droid_voice_${interaction.id}${ext}`);
+      tempFilePath = path.join(os.tmpdir(), `nightfox_droid_voice_${interaction.id}${ext}`);
       const response = await fetch(audioAttachment.url);
       if (!response.ok) throw new Error(`Download failed: ${response.status}`);
       const arrayBuffer = await response.arrayBuffer();

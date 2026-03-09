@@ -65,7 +65,7 @@ export async function handleVoiceMessage(
       : attachment.contentType?.includes('mp4') ? '.mp4'
       : '.ogg';
 
-    tempFilePath = path.join(os.tmpdir(), `claudegram_discord_voice_${message.id}${ext}`);
+    tempFilePath = path.join(os.tmpdir(), `nightfox_discord_voice_${message.id}${ext}`);
 
     // Check attachment size before download (Groq Whisper max: 25MB)
     const MAX_AUDIO_SIZE_MB = 25;

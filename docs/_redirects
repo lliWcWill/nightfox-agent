@@ -1,5 +1,2 @@
-# Redirect www to apex
-https://www.claudegram.com/* https://claudegram.com/:splat 301
-
-# Redirect pages.dev to custom domain
-https://claudegram.pages.dev/* https://claudegram.com/:splat 301
+# Custom domain not configured for Nightfox yet.
+# Add redirects here once a real domain is chosen.

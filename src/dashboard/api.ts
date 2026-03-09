@@ -1,12 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { homedir } from 'os';
-import { join } from 'path';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { sessionManager } from '../claude/session-manager.js';
 import { getCachedUsage } from '../claude/agent.js';
 import { isProcessing, getQueuePosition } from '../claude/request-queue.js';
 import { config } from '../config.js';
 import type { DashboardTask, AgentStatusInfo, QueueInfo } from './types.js';
+import { ensureHomeStateDir, getHomeStatePath, resolveExistingHomeStatePath } from '../utils/app-paths.js';
 
 // ── In-memory agent status (updated by eventBus listeners in server.ts) ──
 
@@ -19,8 +18,8 @@ export const agentStatuses: Map<string, AgentStatusInfo> = new Map([
 
 // ── Task storage ────────────────────────────────────────────────────
 
-const TASKS_DIR = join(homedir(), '.claudegram');
-const TASKS_FILE = join(TASKS_DIR, 'dashboard-tasks.json');
+const TASKS_FILE = getHomeStatePath('dashboard-tasks.json');
+const TASKS_LOAD_FILE = resolveExistingHomeStatePath('dashboard-tasks.json');
 
 /**
  * Loads persisted dashboard tasks from the tasks file in the user's home directory.
@@ -30,9 +29,9 @@ const TASKS_FILE = join(TASKS_DIR, 'dashboard-tasks.json');
  * @returns An array of stored DashboardTask objects, or an empty array if none are available.
  */
 function loadTasks(): DashboardTask[] {
-  if (!existsSync(TASKS_FILE)) return [];
+  if (!existsSync(TASKS_LOAD_FILE)) return [];
   try {
-    return JSON.parse(readFileSync(TASKS_FILE, 'utf-8'));
+    return JSON.parse(readFileSync(TASKS_LOAD_FILE, 'utf-8'));
   } catch {
     return [];
   }
@@ -47,7 +46,7 @@ function loadTasks(): DashboardTask[] {
  * @param tasks - The array of DashboardTask objects to persist
  */
 function saveTasks(tasks: DashboardTask[]): void {
-  if (!existsSync(TASKS_DIR)) mkdirSync(TASKS_DIR, { recursive: true });
+  ensureHomeStateDir();
   writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
 }
 

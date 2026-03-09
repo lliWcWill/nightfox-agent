@@ -3,10 +3,11 @@ import { z } from 'zod';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync, readFileSync } from 'fs';
+import { APP_NAME, resolveEnvPath } from './utils/app-paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultEnvPath = path.resolve(__dirname, '..', '.env');
-const envPath = process.env.CLAUDEGRAM_ENV_PATH || defaultEnvPath;
+const envPath = resolveEnvPath(defaultEnvPath);
 loadEnv({ path: envPath });
 
 const envSchema = z.object({
@@ -54,7 +55,7 @@ const envSchema = z.object({
     .string()
     .default('true')
     .transform((val) => val.toLowerCase() === 'true'),
-  BOT_NAME: z.string().default('Claudegram'),
+    BOT_NAME: z.string().default(APP_NAME),
   BOT_MODE: z.enum(['dev', 'prod']).default('dev'),
   STREAMING_MODE: z.enum(['streaming', 'wait']).default('streaming'),
   STREAMING_DEBOUNCE_MS: z

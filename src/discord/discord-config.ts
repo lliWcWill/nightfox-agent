@@ -2,10 +2,11 @@ import { config as loadEnv } from 'dotenv';
 import { z } from 'zod';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { resolveEnvPath } from '../utils/app-paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultEnvPath = path.resolve(__dirname, '../..', '.env');
-const envPath = process.env.CLAUDEGRAM_ENV_PATH || defaultEnvPath;
+const envPath = resolveEnvPath(defaultEnvPath);
 loadEnv({ path: envPath });
 
 const discordEnvSchema = z.object({

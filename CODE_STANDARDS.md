@@ -1,4 +1,4 @@
-# Code Standards — Claudegram
+# Code Standards — Nightfox
 
 > Every sprint agent MUST read this before writing any code.
 

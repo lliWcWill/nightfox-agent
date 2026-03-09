@@ -6,8 +6,8 @@
   - `artifacts[]`
 - Extended job snapshots to include `resultSummary` and `artifacts`.
 - CodeRabbit worker now writes artifacts per job:
-  - `.claudegram/artifacts/jobs/<jobId>/result.json`
-  - `.claudegram/artifacts/jobs/<jobId>/summary.md`
+  - `.nightfox/artifacts/jobs/<jobId>/result.json`
+  - `.nightfox/artifacts/jobs/<jobId>/summary.md`
 - Job cards now include **Show result** when structured output exists.
 - `/jobs` now shows a short result summary snippet.
 

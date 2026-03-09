@@ -1,4 +1,4 @@
-# OpenAI Codex OAuth Runbook (Claudegram)
+# OpenAI Codex OAuth Runbook (Nightfox)
 
 ## Purpose
 Prevent repeat regressions in the OpenAI OAuth + Codex path, especially after refactors.

@@ -39,7 +39,7 @@ async function runRehydrationSmoke(tmpRoot) {
   ]);
 
   const registry = new JobRegistry({
-    persistPath: path.join(tmpRoot, '.claudegram', 'jobs', 'jobs.jsonl'),
+    persistPath: path.join(tmpRoot, '.nightfox', 'jobs', 'jobs.jsonl'),
     ttlMs: 1000 * 60 * 60,
     maxLogsPerJob: 200,
   });
@@ -183,7 +183,7 @@ async function runNotifierFallbackSmoke(tmpRoot) {
 }
 
 async function main() {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'claudegram-delegation-smoke-'));
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nightfox-delegation-smoke-'));
   const rehydration = await runRehydrationSmoke(path.join(tmpRoot, 'rehydration'));
   const notifierFallback = await runNotifierFallbackSmoke(path.join(tmpRoot, 'notifier'));
 

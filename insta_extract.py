@@ -19,11 +19,23 @@ import argparse
 import getpass
 from pathlib import Path
 
-SESSION_DIR = os.path.join(os.path.expanduser('~'), '.claudegram', 'instagrapi')
+HOME_DIR = os.path.expanduser('~')
+SESSION_DIR = os.path.join(HOME_DIR, '.nightfox', 'instagrapi')
+LEGACY_SESSION_DIR = os.path.join(HOME_DIR, '.claudegram', 'instagrapi')
 SESSION_FILE = os.path.join(SESSION_DIR, 'session.json')
 CREDS_FILE = os.path.join(SESSION_DIR, 'credentials.json')
+LEGACY_SESSION_FILE = os.path.join(LEGACY_SESSION_DIR, 'session.json')
+LEGACY_CREDS_FILE = os.path.join(LEGACY_SESSION_DIR, 'credentials.json')
 
 DELAY_RANGE = [2, 5]
+
+
+def preferred_or_legacy(preferred: str, legacy: str) -> str:
+    if os.path.exists(preferred):
+        return preferred
+    if os.path.exists(legacy):
+        return legacy
+    return preferred
 
 
 def output_json(data: dict):
@@ -52,12 +64,13 @@ def load_credentials() -> tuple[str, str]:
     Returns:
         tuple[str, str]: A tuple containing the saved username and password.
     """
-    if not os.path.exists(CREDS_FILE):
+    creds_file = preferred_or_legacy(CREDS_FILE, LEGACY_CREDS_FILE)
+    if not os.path.exists(creds_file):
         output_error(
             'No credentials found. Run: python3 insta_extract.py --login',
             'NO_CREDENTIALS'
         )
-    with open(CREDS_FILE, 'r') as f:
+    with open(creds_file, 'r') as f:
         creds = json.load(f)
     return creds['username'], creds['password']
 
@@ -74,7 +87,8 @@ def get_client():
     from instagrapi import Client
     from instagrapi.exceptions import LoginRequired
 
-    if not os.path.exists(SESSION_FILE):
+    session_file = preferred_or_legacy(SESSION_FILE, LEGACY_SESSION_FILE)
+    if not os.path.exists(session_file):
         output_error(
             'No session found. Run: python3 insta_extract.py --import-session /path/to/cookies.txt',
             'NO_SESSION'
@@ -82,12 +96,13 @@ def get_client():
 
     cl = Client()
     cl.delay_range = DELAY_RANGE
-    cl.load_settings(SESSION_FILE)
+    cl.load_settings(session_file)
 
     # Check if we have real credentials for re-login
     creds_data = {}
-    if os.path.exists(CREDS_FILE):
-        with open(CREDS_FILE, 'r') as f:
+    creds_file = preferred_or_legacy(CREDS_FILE, LEGACY_CREDS_FILE)
+    if os.path.exists(creds_file):
+        with open(creds_file, 'r') as f:
             creds_data = json.load(f)
 
     has_password = bool(creds_data.get('password'))
@@ -247,7 +262,7 @@ def do_import_session(cookies_path: str):
     print(f'Session saved to: {SESSION_FILE}')
     print(f'User ID: {ds_user_id}')
     print('Ready to use. Test with:')
-    print('  python3 ~/claudegram/insta_extract.py --session-check')
+    print('  python3 ~/nightfox/insta_extract.py --session-check')
 
 
 def do_login(cli_username: str = None, cli_password: str = None, proxy: str = None):

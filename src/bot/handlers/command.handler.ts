@@ -94,7 +94,7 @@ function getActiveTTSVoices(): readonly string[] {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '../../..');
-const BOTCTL_PATH = path.join(PROJECT_ROOT, 'scripts', 'claudegram-botctl.sh');
+const BOTCTL_PATH = path.join(PROJECT_ROOT, 'scripts', 'nightfox-botctl.sh');
 const PROJECT_BROWSER_PAGE_SIZE = 8;
 
 type ProjectBrowserState = {
@@ -268,7 +268,7 @@ export async function handleStart(ctx: Context): Promise<void> {
     ? '\n\n⚠️ *DANGEROUS MODE ENABLED* \\- All tool permissions auto\\-approved'
     : '';
 
-  const welcomeMessage = `👋 *Welcome to Claudegram\\!*
+  const welcomeMessage = `👋 *Welcome to Nightfox\\!*
 
 I bridge your messages to Claude Code running on your local machine\\.
 
@@ -1057,7 +1057,7 @@ export async function handleBotStatus(ctx: Context): Promise<void> {
 
 export async function handleRestartBot(ctx: Context): Promise<void> {
   if (!botctlExists()) {
-    await replyMd(ctx, '❌ Bot control script not found\\.\n\nExpected at `scripts/claudegram-botctl.sh`\\.');
+    await replyMd(ctx, '❌ Bot control script not found\\.\n\nExpected at `scripts/nightfox-botctl.sh`\\.');
     return;
   }
 
@@ -1761,7 +1761,7 @@ function ensureRedditOutputDir(ctx: Context): string {
   const chatId = ctx.chat?.id;
   const session = chatId ? sessionManager.getSession(chatId) : null;
   const baseDir = session ? session.workingDirectory : process.cwd();
-  const dir = path.join(baseDir, '.claudegram', 'reddit');
+  const dir = path.join(baseDir, '.nightfox', 'reddit');
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -1784,7 +1784,7 @@ function ensureMediumOutputDir(ctx: Context, url: string): string {
   const session = chatId ? sessionManager.getSession(chatId) : null;
   const baseDir = session ? session.workingDirectory : process.cwd();
   const slug = slugFromUrl(url);
-  const dir = path.join(baseDir, '.claudegram', 'medium', slug);
+  const dir = path.join(baseDir, '.nightfox', 'medium', slug);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -1906,7 +1906,7 @@ export async function executeRedditFetch(
     let userMessage: string;
 
     if (errorMessage.includes('Missing Reddit credentials') || errorMessage.includes('REDDIT_CLIENT_ID')) {
-      userMessage = "❌ Reddit credentials not configured\\.\n\nSet `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD` in claudegram's `\\.env` file\\.";
+      userMessage = "❌ Reddit credentials not configured\\.\n\nSet `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD` in Nightfox's `\\.env` file\\.";
     } else if (errorMessage.includes('timed out') || errorMessage.includes('AbortError')) {
       userMessage = '❌ Reddit fetch timed out\\.';
     } else {
@@ -1960,7 +1960,7 @@ export async function handleRedditActionCallback(ctx: Context): Promise<void> {
             `📎 Reddit JSON saved: ${path.basename(outputPath)}`
           );
 
-          const displayPath = `.claudegram/reddit/${path.basename(outputPath)}`;
+          const displayPath = `.nightfox/reddit/${path.basename(outputPath)}`;
           const notice = sent
             ? `Large thread detected \\(${output.length} chars\\) — sent JSON file for structured review\\.`
             : `Large thread detected \\(${output.length} chars\\) — JSON saved at \`${esc(displayPath)}\`\\.`;
@@ -2000,7 +2000,7 @@ export async function handleRedditActionCallback(ctx: Context): Promise<void> {
           : output;
 
         // Use relative display path to avoid leaking absolute server paths in conversation
-        const displayPath = `.claudegram/reddit/${path.basename(mdPath)}`;
+        const displayPath = `.nightfox/reddit/${path.basename(mdPath)}`;
 
         let prompt = `I just fetched Reddit content and saved it to ${displayPath}. Here's the content:\n\n${inlineContent}`;
         if (truncated) {
@@ -2302,7 +2302,7 @@ export async function sendTranscriptResult(ctx: Context, transcript: string): Pr
   if (transcript.length <= config.TRANSCRIBE_FILE_THRESHOLD_CHARS) {
     await messageSender.sendMessage(ctx, transcript);
   } else {
-    const tmpPath = path.join(os.tmpdir(), `claudegram_transcript_${Date.now()}.txt`);
+    const tmpPath = path.join(os.tmpdir(), `nightfox_transcript_${Date.now()}.txt`);
     try {
       fs.writeFileSync(tmpPath, transcript, 'utf-8');
       const inputFile = new InputFile(fs.readFileSync(tmpPath), 'transcript.txt');
@@ -2343,7 +2343,7 @@ async function transcribeAndSend(
       : mimeHint?.includes('wav') ? '.wav'
       : mimeHint?.includes('mp4') ? '.m4a'
       : '.oga';
-    tempFilePath = path.join(os.tmpdir(), `claudegram_transcribe_${Date.now()}${ext}`);
+    tempFilePath = path.join(os.tmpdir(), `nightfox_transcribe_${Date.now()}${ext}`);
 
     await downloadTelegramAudio(config.TELEGRAM_BOT_TOKEN, file.file_path, tempFilePath);
 

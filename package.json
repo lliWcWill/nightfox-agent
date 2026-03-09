@@ -1,5 +1,5 @@
 {
-  "name": "claudegram",
+  "name": "nightfox",
   "version": "1.0.0",
   "description": "Telegram bot that bridges messages to Claude Code with full agent capabilities",
   "type": "module",

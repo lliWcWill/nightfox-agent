@@ -154,7 +154,7 @@ function createRemember(): GeminiTool {
         const insert = db.transaction(() => {
           const result = db!.prepare(`
             INSERT INTO memories (type, category, title, content, project, salience, scope, source)
-            VALUES ('long_term', 'note', ?, ?, 'claudegram', 0.6, 'project', 'agent:discord-voice')
+            VALUES ('long_term', 'note', ?, ?, 'nightfox', 0.6, 'project', 'agent:discord-voice')
           `).run(title, content);
 
           db!.prepare(`

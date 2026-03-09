@@ -5,9 +5,8 @@
 
 import { config } from '../config.js';
 import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
 import { z } from 'zod';
+import { ensureHomeStateDir, getHomeStatePath, resolveExistingHomeStatePath } from '../utils/app-paths.js';
 
 // Zod schema for terminal UI settings
 const terminalSettingsSchema = z.object({
@@ -23,14 +22,12 @@ export interface TerminalUISettings {
   enabled: boolean;
 }
 
-const SETTINGS_DIR = path.join(os.homedir(), '.claudegram');
-const SETTINGS_FILE = path.join(SETTINGS_DIR, 'terminal-ui-settings.json');
+const SETTINGS_FILE = getHomeStatePath('terminal-ui-settings.json');
+const SETTINGS_LOAD_FILE = resolveExistingHomeStatePath('terminal-ui-settings.json');
 const chatTerminalSettings: Map<number, TerminalUISettings> = new Map();
 
 function ensureDirectory(): void {
-  if (!fs.existsSync(SETTINGS_DIR)) {
-    fs.mkdirSync(SETTINGS_DIR, { recursive: true });
-  }
+  ensureHomeStateDir();
 }
 
 function normalizeSettings(settings?: Partial<TerminalUISettings>): TerminalUISettings {
@@ -41,10 +38,10 @@ function normalizeSettings(settings?: Partial<TerminalUISettings>): TerminalUISe
 
 function loadSettings(): void {
   ensureDirectory();
-  if (!fs.existsSync(SETTINGS_FILE)) return;
+  if (!fs.existsSync(SETTINGS_LOAD_FILE)) return;
 
   try {
-    const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+    const raw = fs.readFileSync(SETTINGS_LOAD_FILE, 'utf-8');
     const parsed = JSON.parse(raw);
 
     // Validate with Zod schema

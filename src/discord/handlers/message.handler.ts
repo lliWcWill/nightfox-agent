@@ -35,7 +35,7 @@ import { user as userItem } from '@openai/agents';
 import type { AgentInputItem } from '@openai/agents';
 import { fileToBase64 } from '../../utils/base64.js';
 
-const UPLOADS_DIR = '.claudegram/uploads';
+const UPLOADS_DIR = '.nightfox/uploads';
 
 function buildImageButtons(opts: { messageId: string; inThread: boolean }) {
   const { messageId, inThread } = opts;
@@ -134,7 +134,7 @@ async function buildReplyContext(message: Message): Promise<ReplyContext | null>
         : audioAttachment.contentType?.includes('webm') ? '.webm'
         : audioAttachment.contentType?.includes('mp4') ? '.mp4'
         : '.ogg';
-      const tempPath = path.join(os.tmpdir(), `claudegram_reply_audio_${refMsg.id}${ext}`);
+      const tempPath = path.join(os.tmpdir(), `nightfox_reply_audio_${refMsg.id}${ext}`);
       const resp = await fetch(audioAttachment.url, { signal: AbortSignal.timeout(30_000) });
       if (resp.ok) {
         const buf = await resp.arrayBuffer();

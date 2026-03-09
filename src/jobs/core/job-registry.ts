@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { JobEvent, JobSnapshot, JobState, JobLogLevel } from './job-types';
+import { getProjectStatePath } from '../../utils/app-paths.js';
 
 type RegistryOpts = {
   persistPath: string;
@@ -208,6 +209,6 @@ export class JobRegistry {
 }
 
 export function defaultJobRegistry(repoRoot: string) {
-  const persistPath = path.join(repoRoot, '.claudegram', 'jobs', 'jobs.jsonl');
+  const persistPath = getProjectStatePath(repoRoot, 'jobs', 'jobs.jsonl');
   return new JobRegistry({ persistPath, ttlMs: 1000 * 60 * 60 * 24, maxLogsPerJob: 2000 });
 }

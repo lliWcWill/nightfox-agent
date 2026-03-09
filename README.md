@@ -1,6 +1,6 @@
 <div align="center">
 
-# Claudegram
+# Nightfox
 
 **Multi-platform AI agent system — Telegram, Discord, and real-time dashboard, powered by OpenAI.**
 
@@ -27,17 +27,17 @@
 
 ## Why OpenAI? The Architecture Shift
 
-Claudegram originally ran on the **Claude Agent SDK** (Anthropic). In early 2026, Anthropic introduced restrictions on OAuth token usage for third-party applications, making it impractical to run Claude Code as a backend agent in bots and external services.
+Nightfox originally ran on the **Claude Agent SDK** (Anthropic). In early 2026, Anthropic introduced restrictions on OAuth token usage for third-party applications, making it impractical to run Claude Code as a backend agent in bots and external services.
 
 **OpenAI has no such restrictions.** The ChatGPT Pro subscription supports OAuth PKCE authentication for programmatic access via the Codex backend — meaning you can run a full agentic runtime against your existing Pro subscription without separate API credits.
 
-Claudegram now runs on the **OpenAI Agents SDK** (`@openai/agents` v0.4.14) with `gpt-5.3-codex` as the default model. The provider layer is abstracted, so swapping between Claude and OpenAI is a single environment variable (`AGENT_PROVIDER=openai` or `AGENT_PROVIDER=claude`).
+Nightfox now runs on the **OpenAI Agents SDK** (`@openai/agents` v0.4.14) with `gpt-5.3-codex` as the default model. The provider layer is abstracted, so swapping between Claude and OpenAI is a single environment variable (`AGENT_PROVIDER=openai` or `AGENT_PROVIDER=claude`).
 
 ---
 
 ## What is this?
 
-Claudegram bridges **Telegram** and **Discord** to a full AI agent running locally on your machine. Send a message — the agent reads your files, runs commands, writes code, browses Reddit, fetches Medium articles, extracts media from YouTube/Instagram/TikTok, transcribes voice notes, reviews code, runs DevOps jobs, and speaks responses back. All from your phone.
+Nightfox bridges **Telegram** and **Discord** to a full AI agent running locally on your machine. Send a message — the agent reads your files, runs commands, writes code, browses Reddit, fetches Medium articles, extracts media from YouTube/Instagram/TikTok, transcribes voice notes, reviews code, runs DevOps jobs, and speaks responses back. All from your phone.
 
 This is not a simple API wrapper. It's a real agentic runtime with tool access — shell execution, file I/O, code editing, web browsing, memory persistence — packaged behind Telegram and Discord interfaces with streaming responses, session memory, and rich output formatting.
 
@@ -135,8 +135,8 @@ This is not a simple API wrapper. It's a real agentic runtime with tool access �
 ### Setup
 
 ```bash
-git clone https://github.com/lliWcWill/claudegram.git
-cd claudegram
+git clone https://github.com/lliWcWill/nightfox-agent.git
+cd nightfox
 cp .env.example .env
 ```
 
@@ -266,7 +266,7 @@ The provider abstraction (`AGENT_PROVIDER` env var) lets you swap the AI backend
 ### OpenAI Auth Flow
 
 ```
-  Codex CLI login  ──▶  ~/.codex/auth.json  ──▶  Claudegram imports tokens
+  Codex CLI login  ──▶  ~/.codex/auth.json  ──▶  Nightfox imports tokens
                                                          │
                               ┌───────────────────────────┘
                               ▼
@@ -531,7 +531,7 @@ All config lives in `.env`. See [`.env.example`](.env.example) for the full anno
 ### Core
 
 - **`WORKSPACE_DIR`** — Root directory for project picker (default: `$HOME`)
-- **`BOT_NAME`** — Bot name in system prompt (default: `Claudegram`)
+- **`BOT_NAME`** — Bot name in system prompt (default: `Nightfox`)
 - **`STREAMING_MODE`** — `streaming` or `wait` (default: `streaming`)
 - **`DANGEROUS_MODE`** — Enable shell/editor tools (default: `false`)
 - **`MAX_LOOP_ITERATIONS`** — Max iterations for `/loop` (default: `5`)
@@ -556,8 +556,8 @@ npm start            # Run compiled build
 
 ```bash
 # Discord bot (production)
-systemctl --user start claudegram-discord
-systemctl --user status claudegram-discord
+systemctl --user start nightfox-discord
+systemctl --user status nightfox-discord
 
 # Log rotation runs automatically on each restart via ExecStartPre
 ```
@@ -591,7 +591,7 @@ Then `/continue` or `/resume` to restore your session.
 
 ## Changelog (Fork Highlights)
 
-This fork (`lliWcWill/claudegram`) extends the original with:
+This fork (`lliWcWill/nightfox-agent`) extends the original with:
 
 ### Architecture
 - **Provider abstraction** — swappable AI backend (OpenAI/Claude) via single env var

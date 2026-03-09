@@ -44,7 +44,7 @@ const CHAT_INLINE_LIMIT = 3000;
  *
  * The handler fetches markdown and JSON for the target, shows an embed with a preview and three buttons (File, Chat, Both), and waits for the command author's choice. Depending on the selection it will:
  * - Send the fetched content as a file (JSON for large results, Markdown otherwise).
- * - Create a project-scoped thread, save the content to the project's .claudegram/reddit directory, queue an AI summarization request, and stream the agent's progress into the thread.
+ * - Create a project-scoped thread, save the content to the project's .nightfox/reddit directory, queue an AI summarization request, and stream the agent's progress into the thread.
  * The command gracefully reports fetch errors, enforces that only the command author may interact with the UI, disables buttons after selection or timeout, and sends ephemeral messages when project context or permissions prevent Chat mode.
  */
 export async function handleReddit(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -203,7 +203,7 @@ export async function handleReddit(interaction: ChatInputCommandInteraction): Pr
         } else {
           // Save content to disk
           const baseDir = session.workingDirectory;
-          const dir = path.join(baseDir, '.claudegram', 'reddit');
+          const dir = path.join(baseDir, '.nightfox', 'reddit');
           await fs.mkdir(dir, { recursive: true });
           const slug = target.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 40);
           const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -216,7 +216,7 @@ export async function handleReddit(interaction: ChatInputCommandInteraction): Pr
             ? markdown.slice(0, CHAT_INLINE_LIMIT).trimEnd()
             : markdown;
 
-          const displayPath = `.claudegram/reddit/${path.basename(mdPath)}`;
+          const displayPath = `.nightfox/reddit/${path.basename(mdPath)}`;
           let prompt = `I just fetched Reddit content and saved it to ${displayPath}. Here's the content:\n\n${inlineContent}`;
           if (truncated) {
             prompt += `\n\n[Content truncated — full content (${markdown.length} chars) is saved at ${displayPath}.]`;

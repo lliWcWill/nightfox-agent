@@ -14,7 +14,7 @@ import {
 import { splitDiscordMessage } from '../markdown.js';
 
 function repoPathFromEnvOrCwd() {
-  return process.env.CLAUDEGRAM_REPO_PATH || process.cwd();
+  return process.env.NIGHTFOX_REPO_PATH || process.env.CLAUDEGRAM_REPO_PATH || process.cwd();
 }
 
 export async function creviewCommand(interaction: ChatInputCommandInteraction) {

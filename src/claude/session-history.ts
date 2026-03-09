@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import { z } from 'zod';
+import { ensureHomeStateDir, getHomeStatePath, resolveExistingHomeStatePath } from '../utils/app-paths.js';
 
 // Zod schema for session history entry
 const sessionHistoryEntrySchema = z.object({
@@ -26,8 +26,8 @@ interface SessionHistoryData {
   sessions: Record<number, SessionHistoryEntry[]>; // chatId -> history entries
 }
 
-const HISTORY_DIR = path.join(os.homedir(), '.claudegram');
-const HISTORY_FILE = path.join(HISTORY_DIR, 'sessions.json');
+const HISTORY_FILE = getHomeStatePath('sessions.json');
+const HISTORY_LOAD_FILE = resolveExistingHomeStatePath('sessions.json');
 const MAX_HISTORY_PER_CHAT = 20;
 
 class SessionHistory {
@@ -39,15 +39,13 @@ class SessionHistory {
   }
 
   private ensureDirectory(): void {
-    if (!fs.existsSync(HISTORY_DIR)) {
-      fs.mkdirSync(HISTORY_DIR, { recursive: true });
-    }
+    ensureHomeStateDir();
   }
 
   private load(): void {
     try {
-      if (fs.existsSync(HISTORY_FILE)) {
-        const content = fs.readFileSync(HISTORY_FILE, 'utf-8');
+      if (fs.existsSync(HISTORY_LOAD_FILE)) {
+        const content = fs.readFileSync(HISTORY_LOAD_FILE, 'utf-8');
         const parsed = JSON.parse(content);
 
         // Validate with Zod schema

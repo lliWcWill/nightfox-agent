@@ -6,7 +6,7 @@ import * as path from 'path';
 import { config } from '../config.js';
 import { resolveBin } from '../utils/resolve-bin.js';
 
-const USER_AGENT = 'claudegram/1.0';
+const USER_AGENT = 'nightfox/1.0';
 const DASH_FETCH_TIMEOUT_MS = 15000;
 const VIDEO_DOWNLOAD_TIMEOUT_SEC = 120;
 const FFMPEG_TIMEOUT_MS = 120000;
@@ -678,7 +678,7 @@ export async function downloadRedditVideo(
     throw new Error('No video found in that link.');
   }
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claudegram-vreddit-'));
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nightfox-vreddit-'));
 
   let finalPath: string;
   let finalSize: number;
@@ -779,7 +779,7 @@ export async function downloadRedditVideo(
 
       // Save the original uncompressed video to a temp directory for later retrieval
       const timestamp = Date.now();
-      const savedDir = path.join(os.tmpdir(), 'claudegram-vreddit-originals');
+      const savedDir = path.join(os.tmpdir(), 'nightfox-vreddit-originals');
       try {
         fs.mkdirSync(savedDir, { recursive: true });
         const savedPath = path.join(savedDir, `vreddit-${timestamp}.mp4`);
