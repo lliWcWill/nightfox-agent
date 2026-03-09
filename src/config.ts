@@ -8,7 +8,7 @@ import { APP_NAME, resolveEnvPath } from './utils/app-paths.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultEnvPath = path.resolve(__dirname, '..', '.env');
 const envPath = resolveEnvPath(defaultEnvPath);
-loadEnv({ path: envPath });
+loadEnv({ path: envPath, quiet: true });
 
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().default(''),
