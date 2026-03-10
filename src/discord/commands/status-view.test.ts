@@ -17,6 +17,8 @@ test('buildStatusMessage shows legacy fallback project source while keeping scop
       total: 3,
       lanes: 'scoped-lane-1',
     },
+    scopedChatId: 12345,
+    legacyChatId: 67890,
     usage: {
       inputTokens: 400,
       outputTokens: 100,
@@ -49,6 +51,8 @@ test('buildStatusMessage shows explicit none source when no project is bound', a
       total: 0,
       lanes: '',
     },
+    scopedChatId: 12345,
+    legacyChatId: 67890,
   });
 
   assert.match(content, /No active session\. Use `\/project <path>` to start\./);

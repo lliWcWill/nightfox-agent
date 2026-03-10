@@ -22,6 +22,8 @@ export interface BuildStatusMessageInput {
   dangerous: boolean;
   recentJobs: StatusRecentJobs;
   scopedClaudeSessionId?: string;
+  scopedChatId: number;
+  legacyChatId: number;
   usage?: StatusUsage;
 }
 
@@ -40,6 +42,10 @@ export function buildStatusMessage(input: BuildStatusMessageInput): string {
       lines.push(`**Job Lanes:** ${input.recentJobs.lanes}`);
     }
 
+    lines.push(`**Lane ID:** \`${input.scopedChatId}\``);
+    if (input.scopedChatId !== input.legacyChatId) {
+      lines.push(`**Legacy Lane ID:** \`${input.legacyChatId}\``);
+    }
     if (input.scopedClaudeSessionId) {
       lines.push(`**Session ID:** \`${input.scopedClaudeSessionId}\``);
     }
@@ -56,6 +62,10 @@ export function buildStatusMessage(input: BuildStatusMessageInput): string {
   } else {
     lines.push('No active session. Use `/project <path>` to start.');
     lines.push(`**Project Source:** ${input.projectSourceLabel}`);
+    lines.push(`**Lane ID:** \`${input.scopedChatId}\``);
+    if (input.scopedChatId !== input.legacyChatId) {
+      lines.push(`**Legacy Lane ID:** \`${input.legacyChatId}\``);
+    }
   }
 
   return lines.join('\n');

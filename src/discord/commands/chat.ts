@@ -13,7 +13,7 @@ import {
   setAbortController,
 } from '../../claude/request-queue.js';
 import type { JobOrigin } from '../../providers/types.js';
-import { sendCompactionNotice, sendSessionInitNotice } from '../compaction-notice.js';
+import { sendCompactionNotice, sendSessionInitNotice, sendUsageNotice } from '../compaction-notice.js';
 
 /**
  * Streams an agent response for a user message into the specified stream, updating progress and tool-operation indicators, then posts compaction and session-initialization notices.

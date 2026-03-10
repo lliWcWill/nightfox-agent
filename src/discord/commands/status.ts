@@ -43,6 +43,8 @@ export async function handleStatus(interaction: ChatInputCommandInteraction): Pr
       lanes,
     },
     scopedClaudeSessionId: lane.scopedSession?.claudeSessionId,
+    scopedChatId,
+    legacyChatId: lane.legacyChatId,
     usage,
   });
 

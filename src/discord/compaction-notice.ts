@@ -49,6 +49,34 @@ export async function sendCompactionNotice(
   }
 }
 
+export async function sendUsageNotice(
+  channel: SendableChannel,
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; contextWindow: number; numTurns: number } | undefined,
+): Promise<void> {
+  if (!config.CONTEXT_SHOW_USAGE || !usage) return;
+
+  const used = usage.inputTokens + usage.outputTokens + usage.cacheReadTokens;
+  const pct = usage.contextWindow > 0
+    ? Math.round((used / usage.contextWindow) * 100)
+    : 0;
+
+  const color = pct >= 80 ? 0xED4245 : pct >= 60 ? 0xFEE75C : 0x57F287;
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle('🧠 Context Status')
+    .setDescription(
+      `**${pct}% context used** · **${fmtTokens(used)} / ${fmtTokens(usage.contextWindow)}**\n`
+      + `Turns: **${usage.numTurns}**`,
+    )
+    .setTimestamp();
+
+  try {
+    await channel.send({ embeds: [embed] });
+  } catch (err) {
+    console.error('[Discord] Failed to send usage notice:', err);
+  }
+}
+
 /**
  * Notifies a Discord channel when an agent starts a new session (session ID changes).
  *

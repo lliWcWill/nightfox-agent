@@ -122,6 +122,7 @@ This is not a simple API wrapper. It's a real agentic runtime with tool access â
 - Tool action icons and detail extraction for all local + MCP tools
 
 ### Nightfox Ops Dashboard
+
 - In-repo Next.js operator dashboard in `apps/dashboard`
 - Live fleet summary, queue pressure, and background job visibility
 - Machine-queryable API surface so Nightfox agents can inspect job and queue state

@@ -298,10 +298,13 @@ export class OpenAIProvider implements AgentProvider {
 
     let fullText = '';
     let resultUsage: AgentUsage | undefined;
+    let compaction: AgentResponse['compaction'] | undefined;
 
     try {
       // Register lifecycle hooks (idempotent — only attaches once per Agent)
       this.ensureToolHooks(agentState.agent);
+
+      compaction = this.maybeCompactHistory(agentState.history, contextWindow);
 
       // Build input: accumulated history + new user message
       const input = Array.isArray(message)
@@ -456,6 +459,27 @@ export class OpenAIProvider implements AgentProvider {
         });
       }
 
+      const isContextOverflow = /context window|context_length_exceeded|maximum context length|input exceeds/i.test(errorMessage);
+      if (isContextOverflow) {
+        const overflowCompaction = this.forceCompactHistory(agentState.history, contextWindow);
+        if (overflowCompaction) {
+          console.warn(`[OpenAI] Context overflow detected. Retrying once after compaction (${overflowCompaction.preTokens} tokens).`);
+          emitProviderEvent('context_overflow_retry', {
+            errorMessage,
+            effectiveModel,
+            compactedPreTokens: overflowCompaction.preTokens,
+          });
+          eventBus.emit('agent:error', {
+            chatId,
+            error: `${errorMessage} (retrying after compaction)`,
+            timestamp: Date.now(),
+          });
+          const retry = await this.send(chatId, message, options);
+          if (!retry.compaction) retry.compaction = overflowCompaction;
+          return retry;
+        }
+      }
+
       emitProviderEvent('send_error', {
         errorMessage,
         requestedModel: requestedModelNorm ?? null,
@@ -500,7 +524,63 @@ export class OpenAIProvider implements AgentProvider {
       text: stripReasoningSummary(fullText) || 'No response from OpenAI.',
       toolsUsed,
       usage: resultUsage,
+      compaction,
     };
+  }
+
+  private estimateTokensFromText(text: string): number {
+    return Math.ceil(text.length / 4);
+  }
+
+  private estimateHistoryTokens(history: HistoryItem[]): number {
+    return history.reduce((sum, item) => sum + this.estimateTokensFromText(item.content), 0);
+  }
+
+  private maybeCompactHistory(history: HistoryItem[], contextWindow: number): AgentResponse['compaction'] | undefined {
+    const estimated = this.estimateHistoryTokens(history);
+    const threshold = Math.floor(contextWindow * 0.6);
+    if (estimated < threshold) return undefined;
+    return this.compactHistory(history, estimated);
+  }
+
+  private forceCompactHistory(history: HistoryItem[], contextWindow: number): AgentResponse['compaction'] | undefined {
+    if (history.length < 4) return undefined;
+    const estimated = this.estimateHistoryTokens(history);
+    const threshold = Math.floor(contextWindow * 0.35);
+    if (estimated <= threshold && history.length <= 8) return undefined;
+    return this.compactHistory(history, estimated);
+  }
+
+  private compactHistory(history: HistoryItem[], preTokens: number): AgentResponse['compaction'] | undefined {
+    if (history.length < 4) return undefined;
+
+    const keepCount = Math.min(6, history.length);
+    const splitIndex = Math.max(2, history.length - keepCount);
+    const older = history.slice(0, splitIndex);
+    const newer = history.slice(splitIndex);
+    if (older.length < 2) return undefined;
+
+    const summarized = older
+      .map((item, index) => {
+        const cleaned = item.content.replace(/\s+/g, ' ').trim();
+        const excerpt = cleaned.length > 240 ? `${cleaned.slice(0, 240)}…` : cleaned;
+        return `${index + 1}. ${item.role}: ${excerpt || '(empty)'}`;
+      })
+      .join('\n');
+
+    const summary: HistoryItem = {
+      role: 'assistant',
+      content: [
+        'Conversation summary for continued context:',
+        '- Older turns were compacted to stay within the model context window.',
+        '- Preserve decisions, requests, and unresolved tasks from the notes below.',
+        '',
+        summarized,
+      ].join('\n'),
+    };
+
+    history.splice(0, history.length, summary, ...newer);
+    return { trigger: 'auto', preTokens };
   }
 
   /**
