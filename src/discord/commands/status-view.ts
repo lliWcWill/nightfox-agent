@@ -1,0 +1,62 @@
+export interface StatusUsage {
+  inputTokens: number;
+  outputTokens: number;
+  contextWindow: number;
+  totalCostUsd: number;
+  numTurns: number;
+}
+
+export interface StatusRecentJobs {
+  running: number;
+  queued: number;
+  total: number;
+  lanes: string;
+}
+
+export interface BuildStatusMessageInput {
+  projectPath?: string;
+  projectSourceLabel: 'scoped' | 'legacy fallback' | 'none';
+  provider: string;
+  model: string;
+  processing: boolean;
+  dangerous: boolean;
+  recentJobs: StatusRecentJobs;
+  scopedClaudeSessionId?: string;
+  usage?: StatusUsage;
+}
+
+export function buildStatusMessage(input: BuildStatusMessageInput): string {
+  const lines: string[] = ['**Bot Status**\n'];
+
+  if (input.projectPath) {
+    lines.push(`**Project:** \`${input.projectPath}\``);
+    lines.push(`**Project Source:** ${input.projectSourceLabel}`);
+    lines.push(`**Provider:** ${input.provider}`);
+    lines.push(`**Model:** ${input.model}`);
+    lines.push(`**Processing:** ${input.processing ? 'Yes' : 'No'}`);
+    lines.push(`**Dangerous Mode:** ${input.dangerous ? 'ENABLED' : 'Disabled'}`);
+    lines.push(`**Jobs (recent):** running ${input.recentJobs.running} · queued ${input.recentJobs.queued} · total ${input.recentJobs.total}`);
+    if (input.recentJobs.lanes) {
+      lines.push(`**Job Lanes:** ${input.recentJobs.lanes}`);
+    }
+
+    if (input.scopedClaudeSessionId) {
+      lines.push(`**Session ID:** \`${input.scopedClaudeSessionId}\``);
+    }
+
+    if (input.usage) {
+      const activeTokens = input.usage.inputTokens + input.usage.outputTokens;
+      const pct = input.usage.contextWindow > 0
+        ? Math.round((activeTokens / input.usage.contextWindow) * 100)
+        : 0;
+      lines.push(`\n**Context:** ${activeTokens.toLocaleString()} / ${input.usage.contextWindow.toLocaleString()} tokens (${pct}%)`);
+      lines.push(`**Cost:** $${input.usage.totalCostUsd.toFixed(4)}`);
+      lines.push(`**Turns:** ${input.usage.numTurns}`);
+    }
+  } else {
+    lines.push('No active session. Use `/project <path>` to start.');
+    lines.push(`**Project Source:** ${input.projectSourceLabel}`);
+  }
+
+  return lines.join('\n');
+}

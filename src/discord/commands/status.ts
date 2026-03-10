@@ -1,10 +1,10 @@
 import { ChatInputCommandInteraction } from 'discord.js';
-import { discordChatId, discordSessionId } from '../id-mapper.js';
-import { sessionManager } from '../../claude/session-manager.js';
+import { projectSourceLabel, resolveDiscordSessionLane } from '../session-lane.js';
 import { getModel, getCachedUsage, isDangerousMode } from '../../claude/agent.js';
 import { isProcessing } from '../../claude/request-queue.js';
 import { config } from '../../config.js';
 import { jobRunner } from '../../jobs/index.js';
+import { buildStatusMessage } from './status-view.js';
 
 /**
  * Sends a concise status summary of the bot and the user's current session to the invoking Discord interaction.
@@ -16,44 +16,35 @@ import { jobRunner } from '../../jobs/index.js';
  * @param interaction - The Discord ChatInputCommandInteraction that triggered the status command
  */
 export async function handleStatus(interaction: ChatInputCommandInteraction): Promise<void> {
-  const chatId = discordSessionId(interaction.user.id, interaction.channelId);
+  const lane = resolveDiscordSessionLane(interaction.user.id, interaction.channelId);
+  const scopedChatId = lane.scopedChatId;
 
-  const session = sessionManager.getSession(chatId);
-  const model = getModel(chatId);
-  const processing = isProcessing(chatId);
+  const model = getModel(scopedChatId);
+  const processing = isProcessing(scopedChatId);
   const dangerous = isDangerousMode();
-  const usage = getCachedUsage(chatId);
+  const usage = getCachedUsage(scopedChatId);
 
-  const lines: string[] = ['**Bot Status**\n'];
-    const recentJobs = jobRunner.listRecent(5);
-    const running = recentJobs.filter(j => j.state === 'running').length;
-    const queued = recentJobs.filter(j => j.state === 'queued').length;
-    const lanes = Array.from(new Set(recentJobs.map((j) => j.lane))).join(', ');
+  const recentJobs = jobRunner.listRecent(5);
+  const running = recentJobs.filter(j => j.state === 'running').length;
+  const queued = recentJobs.filter(j => j.state === 'queued').length;
+  const lanes = Array.from(new Set(recentJobs.map((j) => j.lane))).join(', ');
 
-  if (session) {
-    lines.push(`**Project:** \`${session.workingDirectory}\``);
-    lines.push(`**Provider:** ${config.AGENT_PROVIDER}`);
-    lines.push(`**Model:** ${model}`);
-      lines.push(`**Processing:** ${processing ? 'Yes' : 'No'}`);
-      lines.push(`**Dangerous Mode:** ${dangerous ? 'ENABLED' : 'Disabled'}`);
-      lines.push(`**Jobs (recent):** running ${running} · queued ${queued} · total ${recentJobs.length}`);
-      if (lanes) lines.push(`**Job Lanes:** ${lanes}`);
+  const content = buildStatusMessage({
+    projectPath: lane.effectiveProjectSession?.workingDirectory,
+    projectSourceLabel: projectSourceLabel(lane.projectSource),
+    provider: config.AGENT_PROVIDER,
+    model,
+    processing,
+    dangerous,
+    recentJobs: {
+      running,
+      queued,
+      total: recentJobs.length,
+      lanes,
+    },
+    scopedClaudeSessionId: lane.scopedSession?.claudeSessionId,
+    usage,
+  });
 
-    if (session.claudeSessionId) {
-      lines.push(`**Session ID:** \`${session.claudeSessionId}\``);
-    }
-
-    if (usage) {
-      // Active context = input + output (cache reads don't consume context window)
-      const activeTokens = usage.inputTokens + usage.outputTokens;
-      const pct = usage.contextWindow > 0 ? Math.round((activeTokens / usage.contextWindow) * 100) : 0;
-      lines.push(`\n**Context:** ${activeTokens.toLocaleString()} / ${usage.contextWindow.toLocaleString()} tokens (${pct}%)`);
-      lines.push(`**Cost:** $${usage.totalCostUsd.toFixed(4)}`);
-      lines.push(`**Turns:** ${usage.numTurns}`);
-    }
-  } else {
-    lines.push('No active session. Use `/project <path>` to start.');
-  }
-
-  await interaction.reply({ content: lines.join('\n'), flags: 64 });
+  await interaction.reply({ content, flags: 64 });
 }

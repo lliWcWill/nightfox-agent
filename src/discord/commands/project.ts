@@ -9,8 +9,8 @@ import {
 } from 'discord.js';
 import * as fs from 'fs';
 import * as path from 'path';
-import { discordChatId } from '../id-mapper.js';
 import { sessionManager } from '../../claude/session-manager.js';
+import { resolveDiscordSessionLane } from '../session-lane.js';
 import {
   type BrowserState,
   BROWSER_TIMEOUT,
@@ -35,7 +35,13 @@ const browserStates = new Map<string, BrowserState>();
  * @param interaction - The Discord ChatInputCommandInteraction for the invoking user and command options
  */
 export async function handleProject(interaction: ChatInputCommandInteraction): Promise<void> {
-  const chatId = discordChatId(interaction.user.id);
+  let lane = resolveDiscordSessionLane(interaction.user.id, interaction.channelId);
+  if (lane.projectSource === 'legacy') {
+    sessionManager.seedWorkingDirectoryFromSession(lane.legacyChatId, lane.scopedChatId);
+    lane = resolveDiscordSessionLane(interaction.user.id, interaction.channelId);
+  }
+
+  const chatId = lane.scopedChatId;
   const projectPath = interaction.options.getString('path');
 
   // Direct path: set immediately
@@ -64,7 +70,7 @@ export async function handleProject(interaction: ChatInputCommandInteraction): P
   const state: BrowserState = { root, current: root, page: 0 };
 
   // Start from current session directory if within root
-  const session = sessionManager.getSession(chatId);
+  const session = lane.scopedSession ?? sessionManager.getSession(chatId);
   if (session && isWithinRoot(root, session.workingDirectory)) {
     state.current = session.workingDirectory;
   }
