@@ -4,6 +4,7 @@ import { discordConfig } from './discord/discord-config.js';
 import { disconnectAll } from './discord/voice-channel/voice-connection.js';
 import { config } from './config.js';
 import { startDashboardServer, stopDashboardServer } from './dashboard/server.js';
+import { turnExecutionLedger } from './dashboard/turn-execution-ledger.js';
 import { mcpManager } from './providers/openai-mcp.js';
 
 /**
@@ -17,6 +18,8 @@ async function main() {
 
   // Register slash commands
   await registerCommands();
+
+  turnExecutionLedger.start();
 
   // Start dashboard server if enabled
   if (config.DASHBOARD_ENABLED) {
@@ -32,6 +35,7 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log('\nShutting down Discord bot...');
+    turnExecutionLedger.stop();
     stopDashboardServer();
 
     // Gracefully disconnect all voice sessions first (closes Gemini, kills ffmpeg cleanly)

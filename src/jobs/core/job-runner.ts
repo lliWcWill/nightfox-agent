@@ -216,6 +216,7 @@ export class JobRunner {
       stallTimeoutMs: opts.stallTimeoutMs,
       resumeSpec: opts.resumeSpec,
       handoff: opts.handoff,
+      returnRoute: opts.returnRoute,
     });
 
     this.pushQueuedJob({ ...opts, lane, rootJobId, jobId, createdAt: at });

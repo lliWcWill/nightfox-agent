@@ -10,6 +10,7 @@ const ALL_EVENTS: DashboardEventType[] = [
   'session:create', 'session:update', 'session:clear',
   'queue:enqueue', 'queue:dequeue', 'queue:processing',
   'job:queued', 'job:origin', 'job:idempotency', 'job:start', 'job:progress', 'job:log', 'job:result', 'job:end',
+  'turn:execution',
 ];
 
 const HEARTBEAT_INTERVAL_MS = 30_000;

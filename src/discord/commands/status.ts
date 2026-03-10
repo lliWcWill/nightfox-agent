@@ -5,6 +5,7 @@ import { isProcessing } from '../../claude/request-queue.js';
 import { config } from '../../config.js';
 import { jobRunner } from '../../jobs/index.js';
 import { buildStatusMessage } from './status-view.js';
+import { turnExecutionLedger } from '../../dashboard/turn-execution-ledger.js';
 
 /**
  * Sends a concise status summary of the bot and the user's current session to the invoking Discord interaction.
@@ -29,6 +30,8 @@ export async function handleStatus(interaction: ChatInputCommandInteraction): Pr
   const queued = recentJobs.filter(j => j.state === 'queued').length;
   const lanes = Array.from(new Set(recentJobs.map((j) => j.lane))).join(', ');
 
+  const lastTurn = turnExecutionLedger.getLatest(scopedChatId);
+
   const content = buildStatusMessage({
     projectPath: lane.effectiveProjectSession?.workingDirectory,
     projectSourceLabel: projectSourceLabel(lane.projectSource),
@@ -46,6 +49,13 @@ export async function handleStatus(interaction: ChatInputCommandInteraction): Pr
     scopedChatId,
     legacyChatId: lane.legacyChatId,
     usage,
+    lastTurn: lastTurn ? {
+      disposition: lastTurn.disposition,
+      toolCount: lastTurn.toolCalls.length,
+      delegatedJobCount: lastTurn.delegatedJobIds.length,
+      delegatedJobIds: lastTurn.delegatedJobIds,
+      completedAt: lastTurn.completedAt,
+    } : undefined,
   });
 
   await interaction.reply({ content, flags: 64 });

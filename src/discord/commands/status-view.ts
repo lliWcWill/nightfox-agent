@@ -15,6 +15,14 @@ export interface StatusRecentJobs {
   lanes: string;
 }
 
+export interface StatusLastTurn {
+  disposition: 'respond_only' | 'respond_and_execute' | 'respond_and_delegate' | 'waiting_on_user';
+  toolCount: number;
+  delegatedJobCount: number;
+  delegatedJobIds: string[];
+  completedAt?: number;
+}
+
 export interface BuildStatusMessageInput {
   projectPath?: string;
   projectSourceLabel: 'scoped' | 'legacy fallback' | 'none';
@@ -27,6 +35,17 @@ export interface BuildStatusMessageInput {
   scopedChatId: number;
   legacyChatId: number;
   usage?: StatusUsage;
+  lastTurn?: StatusLastTurn;
+}
+
+
+function formatLastTurnDisposition(disposition: StatusLastTurn['disposition']): string {
+  switch (disposition) {
+    case 'respond_and_execute': return 'replied + executed tools';
+    case 'respond_and_delegate': return 'replied + delegated work';
+    case 'waiting_on_user': return 'waiting on user';
+    default: return 'reply only';
+  }
 }
 
 export function buildStatusMessage(input: BuildStatusMessageInput): string {
@@ -58,6 +77,15 @@ export function buildStatusMessage(input: BuildStatusMessageInput): string {
       lines.push(`\n**Context:** ${activeTokens.toLocaleString()} / ${input.usage.contextWindow.toLocaleString()} tokens (${pct}%)`);
       lines.push(`**Cost:** $${input.usage.totalCostUsd.toFixed(4)}`);
       lines.push(`**Turns:** ${input.usage.numTurns}`);
+    }
+
+    if (input.lastTurn) {
+      lines.push(`\n**Last Turn Outcome:** ${formatLastTurnDisposition(input.lastTurn.disposition)}`);
+      lines.push(`**Tools Used:** ${input.lastTurn.toolCount}`);
+      lines.push(`**Delegated Jobs:** ${input.lastTurn.delegatedJobCount}`);
+      if (input.lastTurn.delegatedJobIds.length > 0) {
+        lines.push(`**Delegated Job IDs:** ${input.lastTurn.delegatedJobIds.map((id) => `\`${id}\``).join(', ')}`);
+      }
     }
   } else {
     lines.push('No active session. Use `/project <path>` to start.');

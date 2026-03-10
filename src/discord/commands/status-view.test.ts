@@ -26,6 +26,12 @@ test('buildStatusMessage shows legacy fallback project source while keeping scop
       totalCostUsd: 0.1256,
       numTurns: 7,
     },
+    lastTurn: {
+      disposition: 'respond_and_delegate',
+      toolCount: 2,
+      delegatedJobCount: 1,
+      delegatedJobIds: ['job-123'],
+    },
   });
 
   assert.match(content, /\*\*Project:\*\* `\/tmp\/legacy-project`/);
@@ -34,6 +40,8 @@ test('buildStatusMessage shows legacy fallback project source while keeping scop
   assert.match(content, /\*\*Processing:\*\* Yes/);
   assert.match(content, /\*\*Context:\*\* 500 \/ 2,000 tokens \(25%\)/);
   assert.doesNotMatch(content, /\*\*Session ID:\*\*/);
+  assert.match(content, /\*\*Last Turn Outcome:\*\* replied \+ delegated work/);
+  assert.match(content, /\*\*Delegated Job IDs:\*\* `job-123`/);
 });
 
 test('buildStatusMessage shows explicit none source when no project is bound', async () => {
