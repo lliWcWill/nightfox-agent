@@ -69,42 +69,45 @@ export function DashboardShell() {
 
     async function bootstrap() {
       try {
-        const [fleetRes, tasksRes] = await Promise.all([
+        const [fleetResult, tasksResult] = await Promise.allSettled([
           fetch(`${API_URL}/api/fleet/summary`),
           fetch(`${API_URL}/api/tasks`),
         ]);
-        if (!fleetRes.ok || !tasksRes.ok || cancelled) {
-          return;
-        }
-        const fleet = (await fleetRes.json()) as FleetSummary;
-        const tasksPayload = (await tasksRes.json()) as {
-          tasks?: DashboardTask[];
-        };
+        if (cancelled) return;
 
-        bootstrapFleet(fleet);
-        const mappedTasks: KanbanTask[] = (tasksPayload.tasks ?? []).map((task) => ({
-          id: task.id,
-          title: task.title,
-          column:
-            task.status === "in_progress" ||
-            task.status === "done" ||
-            task.status === "archived"
-              ? task.status
-              : "todo",
-          agent:
-            task.assignedAgent === "gemini" ||
-            task.assignedAgent === "droid" ||
-            task.assignedAgent === "groq"
-              ? task.assignedAgent
-              : "claude",
-          createdAt: task.createdAt,
-          updatedAt: task.updatedAt,
-          description: task.description || undefined,
-          priority: task.priority,
-        }));
-        setKanbanTasks(mappedTasks);
-      } catch {
-        // Best effort bootstrap; live events continue over WS.
+        if (fleetResult.status === "fulfilled" && fleetResult.value.ok) {
+          const fleet = (await fleetResult.value.json()) as FleetSummary;
+          bootstrapFleet(fleet);
+        }
+
+        if (tasksResult.status === "fulfilled" && tasksResult.value.ok) {
+          const tasksPayload = (await tasksResult.value.json()) as {
+            tasks?: DashboardTask[];
+          };
+          const mappedTasks: KanbanTask[] = (tasksPayload.tasks ?? []).map((task) => ({
+            id: task.id,
+            title: task.title,
+            column:
+              task.status === "in_progress" ||
+              task.status === "done" ||
+              task.status === "archived"
+                ? task.status
+                : "todo",
+            agent:
+              task.assignedAgent === "gemini" ||
+              task.assignedAgent === "droid" ||
+              task.assignedAgent === "groq"
+                ? task.assignedAgent
+                : "claude",
+            createdAt: task.createdAt,
+            updatedAt: task.updatedAt,
+            description: task.description || undefined,
+            priority: task.priority,
+          }));
+          setKanbanTasks(mappedTasks);
+        }
+      } catch (err) {
+        console.warn("[DashboardShell] bootstrap failed:", err);
       }
     }
 
@@ -205,19 +208,21 @@ export function DashboardShell() {
                 <ActionLog compact />
               </div>
             </div>
-          )}
+            )}
 
-          {/* Full action log view */}
-          {activePanel === "log" && (
-            <div className="grid h-full grid-cols-3 gap-3">
-              <div className="col-span-2">
-                <ActionLog />
+            {/* Full action log view */}
+            {activePanel === "log" && (
+              <div className="grid h-full min-h-0 grid-cols-3 gap-3">
+                <div className="col-span-2 min-h-0">
+                  <ActionLog />
+                </div>
+                <div className="min-h-0">
+                  <ToolCalls />
+                </div>
               </div>
-              <ToolCalls />
-            </div>
-          )}
+            )}
 
-          {activePanel === "tools" && <ToolCalls />}
+            {activePanel === "tools" && <ToolCalls />}
 
           {activePanel === "tasks" && <KanbanBoard />}
 

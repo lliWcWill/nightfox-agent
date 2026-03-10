@@ -10,7 +10,7 @@ import type {
   DashboardJobResultPayload,
 } from "@/lib/types";
 import { cn, formatDuration, formatStructuredValue, formatTimestamp, truncate } from "@/lib/utils";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const LANE_COLORS = {
   main: "var(--agent-claude)",
@@ -58,6 +58,12 @@ function JobDetail({ jobId, onClose }: { jobId: string; onClose: () => void }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [canceling, setCanceling] = useState(false);
+  const selectedJobId = useDashboardStore((s) => s.selectedJobId);
+  const jobs = useDashboardStore((s) => s.jobs);
+  const eventsFeed = useDashboardStore((s) => s.events);
+  const lastResultEventIdRef = useRef<string | null>(null);
+  const lastEndEventIdRef = useRef<string | null>(null);
+  const lastLogEventIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,6 +100,84 @@ function JobDetail({ jobId, onClose }: { jobId: string; onClose: () => void }) {
       cancelled = true;
     };
   }, [jobId]);
+
+  useEffect(() => {
+    if (selectedJobId !== jobId) {
+      lastResultEventIdRef.current = null;
+      lastEndEventIdRef.current = null;
+      lastLogEventIdRef.current = null;
+      return;
+    }
+
+    const liveJob = jobs.find((job) => job.jobId === jobId);
+    if (liveJob) {
+      setResult((prev) => prev ? {
+        ...prev,
+        state: liveJob.state,
+        resultSummary: liveJob.resultSummary ?? prev.resultSummary,
+        artifacts: liveJob.artifacts ?? prev.artifacts,
+        endedAt: liveJob.endedAt ?? prev.endedAt,
+      } : prev);
+    }
+
+    const relevantEvents = eventsFeed.filter((event) => String(event.payload.jobId ?? '') === jobId);
+    if (relevantEvents.length === 0) {
+      return;
+    }
+
+    for (const event of relevantEvents) {
+      if (event.type === 'job:log' && event.id !== lastLogEventIdRef.current) {
+        lastLogEventIdRef.current = event.id;
+        const payload = event.payload as { at?: number; level?: 'info' | 'warn' | 'error'; message?: string };
+        setLogs((prev) => {
+          const nextLog = {
+            at: typeof payload.at === 'number' ? payload.at : event.timestamp,
+            level: payload.level ?? 'info',
+            message: payload.message ?? '',
+          };
+          const existing = prev?.logs ?? [];
+          return {
+            jobId,
+            state: liveJob?.state ?? prev?.state ?? 'running',
+            total: (prev?.total ?? existing.length) + 1,
+            cursor: prev?.cursor ?? 0,
+            nextCursor: prev?.nextCursor ?? existing.length + 1,
+            hasMore: prev?.hasMore ?? false,
+            logs: [...existing, nextLog].slice(-200),
+          };
+        });
+      }
+
+      if ((event.type === 'job:result' || event.type === 'job:end') && event.id !== lastResultEventIdRef.current) {
+        lastResultEventIdRef.current = event.id;
+        void fetch(`${API_URL}/api/jobs/${jobId}/result`)
+          .then((res) => (res.ok ? res.json() : null))
+          .then((json) => {
+            if (json) setResult(json as DashboardJobResultPayload);
+          })
+          .catch(() => undefined);
+      }
+
+      if (event.id !== lastEndEventIdRef.current) {
+        lastEndEventIdRef.current = event.id;
+        setEvents((prev) => {
+          const existing = prev?.events ?? [];
+          if (existing.some((item) => JSON.stringify(item) === JSON.stringify(event.payload))) {
+            return prev;
+          }
+          return {
+            jobId,
+            state: liveJob?.state ?? prev?.state ?? 'running',
+            total: (prev?.total ?? existing.length) + 1,
+            cursor: prev?.cursor ?? 0,
+            nextCursor: prev?.nextCursor ?? existing.length + 1,
+            hasMore: prev?.hasMore ?? false,
+            events: [...existing, event.payload].slice(-200),
+          };
+        });
+      }
+    }
+  }, [eventsFeed, jobId, jobs, selectedJobId]);
 
   async function handleCancel() {
     setCanceling(true);

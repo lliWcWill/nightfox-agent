@@ -71,6 +71,21 @@ export class ObjectiveEventStore {
     return [...(this.eventsByObjective.get(objectiveId) ?? [])];
   }
 
+  page(objectiveId: string, cursor = 0, limit = 200) {
+    const events = this.eventsByObjective.get(objectiveId) ?? [];
+    const safeCursor = Math.max(0, Math.min(cursor, events.length));
+    const safeLimit = Math.max(1, Math.min(limit, this.maxEventsPerObjective));
+    const slice = events.slice(safeCursor, safeCursor + safeLimit);
+    const nextCursor = safeCursor + slice.length;
+    return {
+      total: events.length,
+      cursor: safeCursor,
+      nextCursor,
+      hasMore: nextCursor < events.length,
+      events: slice,
+    };
+  }
+
   recordCreated(objective: ObjectiveRecord) {
     return this.append({
       objectiveId: objective.objectiveId,

@@ -81,7 +81,7 @@ function ConversationBubble({
   event: DashboardEvent;
 }) {
   const isUser = event.type === "groq:complete";
-  const text = String(event.payload.text || "");
+  const text = String(event.payload?.text ?? "");
   const Icon = isUser ? Mic : Brain;
   const label = isUser ? "You" : "Gemini";
   const accentColor = isUser ? "var(--agent-groq)" : "var(--agent-gemini)";
@@ -237,24 +237,25 @@ export function ActionLog({ compact = false }: { compact?: boolean }) {
     [events]
   );
   const filtered = normalizedFilter
-    ? searchableEvents
-        .filter(({ searchText }) => searchText.includes(normalizedFilter))
-        .map(({ event }) => event)
+      ? searchableEvents
+          .filter(({ searchText }) => searchText.includes(normalizedFilter))
+          .map(({ event }) => event)
     : events;
+  const orderedEvents = useMemo(() => [...filtered].reverse(), [filtered]);
 
   // Auto-scroll after the DOM has laid out the latest rows.
   useEffect(() => {
-    if (autoScroll && filtered.length > 0 && parentRef.current) {
+    if (autoScroll && orderedEvents.length > 0 && parentRef.current) {
       requestAnimationFrame(() => {
         if (parentRef.current) {
-          parentRef.current.scrollTop = parentRef.current.scrollHeight;
+          parentRef.current.scrollTop = 0;
         }
       });
     }
-  }, [filtered.length, autoScroll]);
+  }, [orderedEvents.length, autoScroll]);
 
   const handleCopyAll = async () => {
-    const ok = await copyToClipboard(formatAllEventsForCopy(filtered));
+    const ok = await copyToClipboard(formatAllEventsForCopy(orderedEvents));
     if (ok) {
       setCopyAllDone(true);
       setTimeout(() => setCopyAllDone(false), 1500);
@@ -335,7 +336,7 @@ export function ActionLog({ compact = false }: { compact?: boolean }) {
             </div>
           ) : (
             <div className="pb-2">
-              {filtered.map((event) => (
+              {orderedEvents.map((event) => (
                 <EventRenderer key={event.id} event={event} />
               ))}
             </div>

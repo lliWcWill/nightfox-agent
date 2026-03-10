@@ -112,6 +112,7 @@ export type JobSnapshot = {
   exitCode?: number | null;
   error?: string;
   logs: Array<{ at: number; level: JobLogLevel; message: string }>;
+  events: JobEvent[];
   resultSummary?: string;
   artifacts?: string[];
 };

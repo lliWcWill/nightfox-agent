@@ -27,6 +27,7 @@ export function AgentStatusPanel() {
     <div className="grid grid-cols-4 gap-3">
       {(Object.keys(AGENTS) as AgentId[]).map((id, i) => {
         const agent = agents[id];
+        if (!agent) return null;
         const config = AGENTS[id];
         const statusStyle = STATUS_STYLES[agent.status];
         const Icon = AGENT_ICONS[id];

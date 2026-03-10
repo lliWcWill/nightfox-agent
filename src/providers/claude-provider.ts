@@ -12,6 +12,8 @@ import {
   type SDKCompactBoundaryMessage,
   type SDKStatusMessage,
   type SDKSystemMessage,
+  type PostToolUseHookInput,
+  type PostToolUseFailureHookInput,
   type PermissionMode,
   type SettingSource,
   type HookEvent,
@@ -115,6 +117,51 @@ export class ClaudeProvider implements AgentProvider {
       let initEvent: { model: string; sessionId: string } | undefined;
       let agentStartTime = Date.now();
       const pendingToolUses: Array<{ callId?: string; toolName: string }> = [];
+      const consumePendingToolUse = (
+        toolUseId?: string,
+        toolName?: string,
+        allowOldestFallback = false,
+      ): { callId?: string; toolName: string } | undefined => {
+        let index = -1;
+
+        if (toolUseId) {
+          index = pendingToolUses.findIndex((entry) => entry.callId === toolUseId);
+        }
+
+        if (index === -1 && toolName) {
+          for (let i = pendingToolUses.length - 1; i >= 0; i -= 1) {
+            if (pendingToolUses[i]?.toolName === toolName) {
+              index = i;
+              break;
+            }
+          }
+        }
+
+        if (index === -1 && allowOldestFallback && pendingToolUses.length > 0) {
+          index = 0;
+        }
+
+        if (index === -1) {
+          return undefined;
+        }
+
+        const [resolved] = pendingToolUses.splice(index, 1);
+        return resolved;
+      };
+
+      const consumePendingToolUsesByIds = (toolUseIds: string[]) => {
+        const matchedCalls: Array<{ callId?: string; toolName: string }> = [];
+        if (toolUseIds.length === 0) {
+          return matchedCalls;
+        }
+        for (let i = pendingToolUses.length - 1; i >= 0; i -= 1) {
+          const entry = pendingToolUses[i];
+          if (entry.callId && toolUseIds.includes(entry.callId)) {
+            matchedCalls.push(...pendingToolUses.splice(i, 1));
+          }
+        }
+        return matchedCalls;
+      };
 
     const permissionMode = getPermissionMode(command);
     const effectiveModel = model || this.chatModels.get(chatId) || 'opus';
@@ -150,23 +197,67 @@ export class ClaudeProvider implements AgentProvider {
         }],
       };
 
+      const toolLifecycleHooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> = {
+        PostToolUse: [{
+          hooks: [async (input) => {
+            const hookInput = input as PostToolUseHookInput;
+            if (config.LOG_AGENT_HOOKS) {
+              logAt('verbose', '[Hook] PostToolUse', hookInput);
+            }
+
+            const resolved = consumePendingToolUse(
+              hookInput.tool_use_id,
+              hookInput.tool_name,
+              true,
+            );
+
+            eventBus.emit('agent:tool_end', {
+              chatId,
+              toolName: resolved?.toolName || hookInput.tool_name || 'unknown',
+              callId: resolved?.callId || hookInput.tool_use_id,
+              output: sanitizeDashboardValue(hookInput.tool_response),
+              timestamp: Date.now(),
+            });
+            onToolEnd?.();
+            return { continue: true };
+          }],
+        }],
+        PostToolUseFailure: [{
+          hooks: [async (input) => {
+            const hookInput = input as PostToolUseFailureHookInput;
+            if (config.LOG_AGENT_HOOKS) {
+              logAt('verbose', '[Hook] PostToolUseFailure', hookInput);
+            }
+
+            const resolved = consumePendingToolUse(
+              hookInput.tool_use_id,
+              hookInput.tool_name,
+              true,
+            );
+
+            eventBus.emit('agent:tool_end', {
+              chatId,
+              toolName: resolved?.toolName || hookInput.tool_name || 'unknown',
+              callId: resolved?.callId || hookInput.tool_use_id,
+              status: 'error',
+              error: hookInput.error,
+              output: sanitizeDashboardValue({
+                error: hookInput.error,
+                toolInput: hookInput.tool_input,
+              }),
+              timestamp: Date.now(),
+            });
+            onToolEnd?.();
+            return { continue: true };
+          }],
+        }],
+      };
+
       const verboseHooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> = config.LOG_AGENT_HOOKS
         ? {
           PreToolUse: [{
             hooks: [async (input) => {
               logAt('verbose', '[Hook] PreToolUse', input);
-              return { continue: true };
-            }],
-          }],
-          PostToolUse: [{
-            hooks: [async (input) => {
-              logAt('verbose', '[Hook] PostToolUse', input);
-              return { continue: true };
-            }],
-          }],
-          PostToolUseFailure: [{
-            hooks: [async (input) => {
-              logAt('verbose', '[Hook] PostToolUseFailure', input);
               return { continue: true };
             }],
           }],
@@ -189,6 +280,7 @@ export class ClaudeProvider implements AgentProvider {
         LOG_LEVELS[getLogLevel()] >= LOG_LEVELS.verbose
           ? {
             ...preCompactHook,
+            ...toolLifecycleHooks,
             ...verboseHooks,
             SessionStart: [{
               hooks: [async (input) => {
@@ -203,7 +295,10 @@ export class ClaudeProvider implements AgentProvider {
               }],
             }],
           }
-          : preCompactHook;
+          : {
+            ...preCompactHook,
+            ...toolLifecycleHooks,
+          };
 
       let cwd = session.workingDirectory;
       try {
@@ -321,26 +416,36 @@ export class ClaudeProvider implements AgentProvider {
           const toolUseIds = responseMessage.preceding_tool_use_ids.filter(
             (toolUseId): toolUseId is string => typeof toolUseId === 'string' && toolUseId.length > 0,
           );
-          let toolIndex = -1;
-          if (toolUseIds.length > 0) {
-            toolIndex = pendingToolUses.findIndex((entry) =>
-              entry.callId ? toolUseIds.includes(entry.callId) : false,
-            );
+          // Summary is fallback-only now. Detailed tool output comes from PostToolUse hooks.
+          const matchedCalls = consumePendingToolUsesByIds(toolUseIds);
+          if (matchedCalls.length === 0 && toolUseIds.length === 0 && pendingToolUses.length > 0) {
+            const fallback = consumePendingToolUse(undefined, undefined, true);
+            if (fallback) matchedCalls.push(fallback);
           }
-          if (toolIndex === -1 && pendingToolUses.length > 0) {
-            toolIndex = 0;
-          }
-          const toolCall = toolIndex >= 0 ? pendingToolUses.splice(toolIndex, 1)[0] : undefined;
-          eventBus.emit('agent:tool_end', {
-            chatId,
-            toolName: toolCall?.toolName || 'unknown',
-            callId: toolCall?.callId,
-            output: sanitizeDashboardValue({
-              summary: responseMessage.summary,
-              precedingToolUseIds: responseMessage.preceding_tool_use_ids,
-            }),
-            timestamp: Date.now(),
+          const now = Date.now();
+          const summaryOutput = sanitizeDashboardValue({
+            summary: responseMessage.summary,
+            precedingToolUseIds: responseMessage.preceding_tool_use_ids,
           });
+          if (matchedCalls.length > 0) {
+            for (const toolCall of matchedCalls) {
+              eventBus.emit('agent:tool_end', {
+                chatId,
+                toolName: toolCall.toolName || 'unknown',
+                callId: toolCall.callId,
+                output: summaryOutput,
+                timestamp: now,
+              });
+            }
+          } else {
+            eventBus.emit('agent:tool_end', {
+              chatId,
+              toolName: 'unknown',
+              callId: undefined,
+              output: summaryOutput,
+              timestamp: now,
+            });
+          }
           onToolEnd?.();
         } else if (responseMessage.type === 'auth_status') {
           logAt('basic', '[Claude] Auth status', responseMessage);

@@ -54,6 +54,8 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 
 const DEFAULT_CONTEXT_WINDOW = 400_000;
 
+type OpenAIStreamLogMode = 'off' | 'clean' | 'verbose';
+
 /** Available OpenAI models grouped by tier for /model command display. */
 export const OPENAI_MODEL_TIERS = {
   flagship: ['gpt-5.2', 'gpt-5.2-pro'] as const,
@@ -84,6 +86,18 @@ function normalizeModelName(model?: string): string | undefined {
 
 function getContextWindow(model: string): number {
   return MODEL_CONTEXT_WINDOWS[model] ?? DEFAULT_CONTEXT_WINDOW;
+}
+
+function getOpenAIStreamLogMode(): OpenAIStreamLogMode {
+  return config.OPENAI_STREAM_LOG_MODE;
+}
+
+function shouldLogOpenAIStreamSummary(): boolean {
+  return getOpenAIStreamLogMode() !== 'off';
+}
+
+function shouldLogOpenAIStreamVerbose(): boolean {
+  return getOpenAIStreamLogMode() === 'verbose';
 }
 
 /** Wraps an AbortController into the Cancellable interface for request-queue. */
@@ -542,13 +556,18 @@ export class OpenAIProvider implements AgentProvider {
     onDelta: (delta: string) => void,
     chatId: number,
   ): void {
-    // Log non-text-delta events for visibility (text deltas are too noisy)
-    if (event.type === 'run_item_stream_event') {
+    // In clean mode, only log high-signal tool lifecycle summaries.
+    if (shouldLogOpenAIStreamVerbose() && event.type === 'run_item_stream_event') {
       const se = event as { name: string; item?: { type: string; rawItem?: Record<string, unknown> } };
       const toolName = se.item?.rawItem && typeof se.item.rawItem.name === 'string' ? ` tool=${se.item.rawItem.name}` : '';
       console.log(`[OpenAI Stream] ${se.name} (${se.item?.type || 'unknown'})${toolName}`);
-    } else if (event.type === 'raw_model_stream_event' && event.data.type !== 'output_text_delta') {
-      // Log raw events that aren't text deltas (function calls, reasoning, etc.)
+    } else if (
+      shouldLogOpenAIStreamVerbose() &&
+      event.type === 'raw_model_stream_event' &&
+      event.data.type !== 'output_text_delta'
+    ) {
+      // Verbose-only raw event logging. Clean mode intentionally suppresses
+      // noisy low-signal events like repeated `model` messages.
       const rawType = event.data.type;
       console.log(`[OpenAI Raw] ${rawType}`);
     }
@@ -571,7 +590,9 @@ export class OpenAIProvider implements AgentProvider {
         if (name === 'tool_call_item_created' && item?.type === 'tool_call_item' && item.rawItem) {
           const raw = item.rawItem;
           const toolName = typeof raw.name === 'string' ? raw.name : 'unknown';
-          console.log(`[OpenAI Stream] Tool call: ${toolName}`);
+          if (shouldLogOpenAIStreamSummary()) {
+            console.log(`[OpenAI Stream] Tool call: ${toolName}`);
+          }
           let toolInput: Record<string, unknown> | undefined;
           if (typeof raw.arguments === 'string') {
             try { toolInput = JSON.parse(raw.arguments) as Record<string, unknown>; } catch { /* partial args */ }
@@ -589,6 +610,11 @@ export class OpenAIProvider implements AgentProvider {
         }
 
         if (name === 'tool_output_item_created') {
+          if (shouldLogOpenAIStreamVerbose()) {
+            const raw = item?.rawItem;
+            const toolName = raw && typeof raw.name === 'string' ? raw.name : 'unknown';
+            console.log(`[OpenAI Stream] Tool output: ${toolName}`);
+          }
           const ref = this.toolCallbackRefs.get(chatId);
           if (ref) {
             const raw = item?.rawItem;

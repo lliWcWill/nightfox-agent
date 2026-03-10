@@ -14,6 +14,7 @@ const ALL_EVENTS: DashboardEventType[] = [
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const REPLAY_LIMIT = 500;
+const MAX_BUFFERED_AMOUNT_BYTES = 512 * 1024;
 
 type SystemMessageType = 'system:hello' | 'system:heartbeat';
 type DashboardWsEnvelope = WsMessage | { type: SystemMessageType; payload: Record<string, unknown>; id?: number; timestamp?: number };
@@ -181,6 +182,11 @@ function shouldSendToClient(ws: WebSocket, message: WsMessage): boolean {
 
 function sendEnvelope(ws: WebSocket, message: DashboardWsEnvelope): void {
   if (ws.readyState !== WebSocket.OPEN) return;
+  if (ws.bufferedAmount > MAX_BUFFERED_AMOUNT_BYTES) {
+    ws.terminate();
+    clientState.delete(ws);
+    return;
+  }
   ws.send(JSON.stringify(message));
 }
 

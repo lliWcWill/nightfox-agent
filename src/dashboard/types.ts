@@ -1,4 +1,6 @@
 import type { JobEvent } from '../jobs/core/job-types.js';
+import type { ObjectiveEvent } from '../autonomy/objective-event-store.js';
+import type { ObjectiveRecord } from '../autonomy/objective-store.js';
 
 // ── Dashboard shared types ───────────────────────────────────────────
 
@@ -326,6 +328,15 @@ export interface DashboardJobEventPage {
   nextCursor: number;
   hasMore: boolean;
   events: JobEvent[];
+}
+
+export interface DashboardObjectiveEventPage {
+  objective: ObjectiveRecord;
+  total: number;
+  cursor: number;
+  nextCursor: number;
+  hasMore: boolean;
+  events: ObjectiveEvent[];
 }
 
 export interface DashboardJobMetrics {

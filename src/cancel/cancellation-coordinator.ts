@@ -81,14 +81,18 @@ export async function cancelChatOperations(params: CancelChatParams): Promise<Ca
   };
 }
 
+export function cancelJobById(jobId: string) {
+  return {
+    jobId,
+    canceled: jobRunner.cancel(jobId),
+  };
+}
+
 export async function cancelObjectiveById(objectiveId: string) {
   const objective = objectiveStore.get(objectiveId);
   if (!objective) return null;
 
   const cancelledJobs = objective.childJobIds.filter((jobId) => jobRunner.cancel(jobId));
-  if (objective.parentJobId) {
-    jobRunner.cancel(objective.parentJobId);
-  }
 
   const updated = objectiveStore.update(objectiveId, {
     state: 'canceled',

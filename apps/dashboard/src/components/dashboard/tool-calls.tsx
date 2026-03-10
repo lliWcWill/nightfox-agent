@@ -30,6 +30,17 @@ import {
   XCircle,
 } from "lucide-react";
 
+type ShellResultEntry = {
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+};
+
+type ShellPayload = {
+  commands: string[];
+  results: ShellResultEntry[];
+};
+
 const TOOL_ICONS: Record<string, React.ElementType> = {
   Bash: Terminal,
   Read: FileText,
@@ -73,6 +84,88 @@ function getToolCallSnippet(toolCall: ToolCallInfo): string {
   return formatted ? truncate(formatted, 140) : "No tool detail captured yet";
 }
 
+function getToolCommands(toolCall: ToolCallInfo): string[] {
+  const input = toolCall.input;
+  if (!input || typeof input !== "object") {
+    return [];
+  }
+
+  const commands =
+    "commands" in input && Array.isArray(input.commands)
+      ? input.commands.filter((value): value is string => typeof value === "string")
+      : [];
+  if (commands.length > 0) {
+    return commands;
+  }
+
+  if ("command" in input && typeof input.command === "string") {
+    return [input.command];
+  }
+
+  return [];
+}
+
+function isShellResultArray(value: unknown): value is ShellResultEntry[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (entry) =>
+        entry &&
+        typeof entry === "object" &&
+        ("stdout" in entry || "stderr" in entry || "exitCode" in entry)
+    )
+  );
+}
+
+function isShellResultEntry(value: unknown): value is ShellResultEntry {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    ("stdout" in value || "stderr" in value || "exitCode" in value)
+  );
+}
+
+function getShellPayload(toolCall: ToolCallInfo): ShellPayload | null {
+  const fallbackCommands = getToolCommands(toolCall);
+
+  if (isShellResultArray(toolCall.output)) {
+    return {
+      commands: fallbackCommands,
+      results: toolCall.output,
+    };
+  }
+
+  if (!toolCall.output || typeof toolCall.output !== "object") {
+    return null;
+  }
+
+  const output = toolCall.output as {
+    commands?: unknown;
+    results?: unknown;
+  };
+
+  if (isShellResultArray(output.results)) {
+    return {
+      commands:
+        Array.isArray(output.commands)
+          ? output.commands.filter(
+              (value): value is string => typeof value === "string"
+            )
+          : fallbackCommands,
+      results: output.results,
+    };
+  }
+
+  if (isShellResultEntry(toolCall.output)) {
+    return {
+      commands: fallbackCommands,
+      results: [toolCall.output],
+    };
+  }
+
+  return null;
+}
+
 function ToolPayloadBlock({
   label,
   value,
@@ -107,6 +200,69 @@ function ToolDetails({
   toolCall: ToolCallInfo;
   large?: boolean;
 }) {
+  const shellPayload = getShellPayload(toolCall);
+
+  if (shellPayload) {
+    return (
+      <div className="grid min-h-0 gap-3">
+        <ToolPayloadBlock
+          label="Input"
+          value={toolCall.input}
+          emptyLabel="No input captured"
+          className={large ? "min-h-[12rem]" : ""}
+        />
+        <div className="grid min-h-0 gap-3">
+          {shellPayload.results.map((result, index) => (
+            <div
+              key={`${toolCall.id}-result-${index}`}
+              className="rounded-xl border border-border/30 bg-surface-0/50 p-3"
+            >
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <span className="text-[10px] font-semibold tracking-[0.18em] text-muted-foreground/60 uppercase">
+                  Command {index + 1}
+                </span>
+                {shellPayload.commands[index] && (
+                  <code className="rounded-md bg-surface-1/80 px-2 py-1 font-mono text-[11px] text-foreground/85">
+                    {shellPayload.commands[index]}
+                  </code>
+                )}
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 font-mono text-[10px]",
+                    result.exitCode === 0
+                      ? "bg-status-ready/15 text-status-ready"
+                      : "bg-status-error/15 text-status-error"
+                  )}
+                >
+                  exit {typeof result.exitCode === "number" ? result.exitCode : "?"}
+                </span>
+              </div>
+              <div
+                className={cn(
+                  "grid min-h-0 gap-3",
+                  large ? "grid-cols-1 xl:grid-cols-2" : "grid-cols-1"
+                )}
+              >
+                <ToolPayloadBlock
+                  label="Stdout"
+                  value={result.stdout}
+                  emptyLabel="No stdout"
+                  className={large ? "min-h-[16rem]" : ""}
+                />
+                <ToolPayloadBlock
+                  label="Stderr"
+                  value={result.stderr}
+                  emptyLabel="No stderr"
+                  className={large ? "min-h-[16rem]" : ""}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(

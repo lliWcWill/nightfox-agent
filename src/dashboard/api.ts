@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { getCachedUsage } from '../claude/agent.js';
 import { config } from '../config.js';
 import { jobRunner } from '../jobs/index.js';
-import { objectiveStore } from '../autonomy/index.js';
+import { objectiveEventStore, objectiveStore } from '../autonomy/index.js';
 import { cancelJobById, cancelObjectiveById } from '../cancel/cancellation-coordinator.js';
 import type {
   DashboardTask,
@@ -273,7 +273,33 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     }
     json(res, { objective: canceled.objective, canceled: true, cancelledJobs: canceled.cancelledJobs });
     return true;
-  }
+  }    const objectiveEventsMatch = path.match(/^\/api\/objectives\/([^/]+)\/events$/);
+    if (objectiveEventsMatch && method === 'GET') {
+      const objective = objectiveStore.get(objectiveEventsMatch[1]);
+      if (!objective) {
+        notFound(res);
+        return true;
+      }
+      const limitRaw = parseInt(url.searchParams.get('limit') ?? '200', 10);
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 2000)) : 200;
+      const cursorRaw = parseInt(url.searchParams.get('cursor') ?? '0', 10);
+      const page = objectiveEventStore.page(
+        objective.objectiveId,
+        Number.isFinite(cursorRaw) ? cursorRaw : 0,
+        limit,
+      );
+      json(res, {
+        objective,
+        total: page.total,
+        cursor: page.cursor,
+        nextCursor: page.nextCursor,
+        hasMore: page.hasMore,
+        events: page.events,
+      });
+      return true;
+    }
+
+
 
   const objectiveMatch = path.match(/^\/api\/objectives\/([^/]+)$/);
   if (objectiveMatch && method === 'GET') {

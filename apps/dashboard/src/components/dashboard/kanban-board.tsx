@@ -55,8 +55,8 @@ const FILTER_TABS: { id: AgentId | "all"; label: string }[] = [
 // ── Task Card ────────────────────────────────────────────────────────
 
 function TaskCard({ task }: { task: KanbanTask }) {
-  const agentConfig = AGENTS[task.agent];
-  const AgentIcon = AGENT_ICONS[task.agent];
+  const agentConfig = AGENTS[task.agent] ?? AGENTS.claude;
+  const AgentIcon = AGENT_ICONS[task.agent] ?? AGENT_ICONS.claude;
   const priority = task.priority ? PRIORITY_CONFIG[task.priority] : null;
   const PriorityIcon = priority?.icon;
 
