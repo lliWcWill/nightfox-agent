@@ -55,9 +55,11 @@ export class JobRegistry {
           stallTimeoutMs: ev.stallTimeoutMs,
           resumeSpec: ev.resumeSpec,
           handoff: ev.handoff,
+          returnRoute: ev.returnRoute,
           state: 'queued',
           origin: (null as any),
           logs: [],
+          events: [ev],
         };
       this.jobs.set(ev.jobId, snap);
       if (ev.parentJobId) {
@@ -69,6 +71,11 @@ export class JobRegistry {
       if (shouldPersist) this.persist(ev);
       if (shouldSweep) this.sweep();
       return;
+    }
+
+    existing.events.push(ev);
+    if (existing.events.length > this.opts.maxLogsPerJob) {
+      existing.events.splice(0, existing.events.length - this.opts.maxLogsPerJob);
     }
 
     switch (ev.type) {
@@ -102,6 +109,8 @@ export class JobRegistry {
         existing.artifacts = ev.artifacts;
         break;
       case 'job:queued':
+        existing.handoff = ev.handoff ?? existing.handoff;
+        existing.returnRoute = ev.returnRoute ?? existing.returnRoute;
         // ignore
         break;
     }

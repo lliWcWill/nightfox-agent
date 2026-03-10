@@ -7,7 +7,7 @@ import { resolveEnvPath } from '../utils/app-paths.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultEnvPath = path.resolve(__dirname, '../..', '.env');
 const envPath = resolveEnvPath(defaultEnvPath);
-loadEnv({ path: envPath });
+loadEnv({ path: envPath, quiet: true });
 
 const discordEnvSchema = z.object({
   DISCORD_BOT_TOKEN: z.string().min(1, 'Discord bot token is required'),

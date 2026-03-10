@@ -1,11 +1,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { JobSnapshot, JobState } from '../../jobs/core/job-types.js';
+import type { JobReturnRoute, JobSnapshot, JobState } from '../../jobs/core/job-types.js';
 import { getProjectStatePath } from '../../utils/app-paths.js';
 
 type NonRunningState = Exclude<JobState, 'queued' | 'running'>;
 
 type OutboxStatus = 'pending' | 'sent' | 'failed';
+
+function routeScopeKey(route?: JobReturnRoute) {
+  if (!route || route.platform !== 'discord') return null;
+  return [
+    route.guildId ?? 'dm',
+    route.channelId,
+    route.threadId ?? 'no-thread',
+    route.userId ?? 'any-user',
+  ].join(':');
+}
 
 export type OutboxItem = {
   key: string;
@@ -30,7 +40,7 @@ export type OutboxItem = {
 };
 
 function outboxKey(s: JobSnapshot): string {
-  return [
+  return routeScopeKey(s.returnRoute) ?? [
     s.origin.guildId ?? 'dm',
     s.origin.channelId,
     s.origin.threadId ?? 'no-thread',

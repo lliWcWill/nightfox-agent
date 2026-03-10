@@ -1,10 +1,17 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { sessionManager } from '../claude/session-manager.js';
 import { getCachedUsage } from '../claude/agent.js';
-import { isProcessing, getQueuePosition } from '../claude/request-queue.js';
 import { config } from '../config.js';
-import type { DashboardTask, AgentStatusInfo, QueueInfo } from './types.js';
+import { jobRunner } from '../jobs/index.js';
+import { objectiveEventStore, objectiveStore } from '../autonomy/index.js';
+import { cancelJobById, cancelObjectiveById } from '../cancel/cancellation-coordinator.js';
+import type {
+  DashboardTask,
+  AgentStatusInfo,
+  QueueInfo,
+  DashboardJobInfo,
+  FleetSummary,
+} from './types.js';
 import { ensureHomeStateDir, getHomeStatePath, resolveExistingHomeStatePath } from '../utils/app-paths.js';
 
 // ── In-memory agent status (updated by eventBus listeners in server.ts) ──
@@ -16,18 +23,13 @@ export const agentStatuses: Map<string, AgentStatusInfo> = new Map([
   ['groq', { id: 'groq', status: 'ready' }],
 ]);
 
+export const queueStates: Map<number, QueueInfo> = new Map();
+
 // ── Task storage ────────────────────────────────────────────────────
 
 const TASKS_FILE = getHomeStatePath('dashboard-tasks.json');
 const TASKS_LOAD_FILE = resolveExistingHomeStatePath('dashboard-tasks.json');
 
-/**
- * Loads persisted dashboard tasks from the tasks file in the user's home directory.
- *
- * Attempts to read and parse the tasks JSON file; if the file is missing or contains invalid JSON, returns an empty array.
- *
- * @returns An array of stored DashboardTask objects, or an empty array if none are available.
- */
 function loadTasks(): DashboardTask[] {
   if (!existsSync(TASKS_LOAD_FILE)) return [];
   try {
@@ -37,28 +39,113 @@ function loadTasks(): DashboardTask[] {
   }
 }
 
-/**
- * Persist the provided dashboard tasks to the user's tasks file on disk.
- *
- * Ensures the tasks directory exists and writes the tasks array as pretty-printed JSON
- * to the configured TASKS_FILE path.
- *
- * @param tasks - The array of DashboardTask objects to persist
- */
 function saveTasks(tasks: DashboardTask[]): void {
   ensureHomeStateDir();
   writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
 }
 
-// ── Request helpers ─────────────────────────────────────────────────
+function listQueues(): QueueInfo[] {
+  return [...queueStates.values()]
+    .filter((queue) => queue.depth > 0 || queue.isProcessing)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
 
-const MAX_BODY = 1024 * 1024; /**
- * Parses and returns the JSON body of an incoming HTTP request, enforcing a 1 MB limit.
- *
- * @param req - The incoming HTTP request to read the body from
- * @returns The parsed JSON value, or an empty object if the body is missing or contains invalid JSON
- * @throws If the request emits an error or if the body size exceeds 1 MB
- */
+function snapshotToJobInfo(limit = 50): DashboardJobInfo[] {
+  return jobRunner.listRecent(limit).map((job) => ({
+    jobId: job.jobId,
+    name: job.name,
+    lane: job.lane,
+    state: job.state,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    endedAt: job.endedAt,
+    parentJobId: job.parentJobId,
+    rootJobId: job.rootJobId,
+    progress: job.progress,
+    resultSummary: job.resultSummary,
+    error: job.error,
+    origin: job.origin
+      ? {
+          channelId: job.origin.channelId,
+          threadId: job.origin.threadId,
+          userId: job.origin.userId,
+        }
+      : undefined,
+  }));
+}
+
+function buildFleetSummary(): FleetSummary {
+  const recent = snapshotToJobInfo(100);
+  return {
+    generatedAt: Date.now(),
+    agents: [...agentStatuses.values()],
+    queues: listQueues(),
+    jobs: {
+      metrics: jobRunner.getMetrics(),
+      active: recent.filter((job) => job.state === 'queued' || job.state === 'running'),
+      recent,
+    },
+    config: {
+      botName: config.BOT_NAME,
+      botMode: config.BOT_MODE,
+      dashboardPort: config.DASHBOARD_PORT,
+      dangerousMode: config.DANGEROUS_MODE,
+    },
+  };
+}
+
+export function recordQueueEnqueue(params: {
+  chatId: number;
+  queueDepth: number;
+  message?: string;
+  timestamp: number;
+}) {
+  const current = queueStates.get(params.chatId);
+  queueStates.set(params.chatId, {
+    chatId: params.chatId,
+    depth: Math.max(0, params.queueDepth),
+    isProcessing: current?.isProcessing ?? false,
+    lastMessage: params.message ?? current?.lastMessage,
+    updatedAt: params.timestamp,
+  });
+}
+
+export function recordQueueProcessing(params: {
+  chatId: number;
+  isProcessing: boolean;
+  timestamp: number;
+}) {
+  const current = queueStates.get(params.chatId);
+  queueStates.set(params.chatId, {
+    chatId: params.chatId,
+    depth: current?.depth ?? 0,
+    isProcessing: params.isProcessing,
+    lastMessage: current?.lastMessage,
+    updatedAt: params.timestamp,
+  });
+}
+
+export function recordQueueDequeue(params: {
+  chatId: number;
+  timestamp: number;
+}) {
+  const current = queueStates.get(params.chatId);
+  const nextDepth = Math.max(0, (current?.depth ?? 1) - 1);
+  const next: QueueInfo = {
+    chatId: params.chatId,
+    depth: nextDepth,
+    isProcessing: current?.isProcessing ?? false,
+    lastMessage: current?.lastMessage,
+    updatedAt: params.timestamp,
+  };
+  if (next.depth === 0 && !next.isProcessing) {
+    queueStates.delete(params.chatId);
+    return;
+  }
+  queueStates.set(params.chatId, next);
+}
+
+const MAX_BODY = 1024 * 1024;
 
 function parseBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -80,13 +167,6 @@ function parseBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-/**
- * Send a JSON response with common CORS headers and the specified status code.
- *
- * @param res - HTTP ServerResponse to write the response to
- * @param data - Value to serialize as the JSON response body
- * @param status - HTTP status code to send (defaults to 200)
- */
 function json(res: ServerResponse, data: unknown, status = 200): void {
   res.writeHead(status, {
     'Content-Type': 'application/json',
@@ -97,30 +177,15 @@ function json(res: ServerResponse, data: unknown, status = 200): void {
   res.end(JSON.stringify(data));
 }
 
-/**
- * Send a 404 JSON response with a standard not-found error payload.
- *
- * @param res - HTTP server response to write the status and body to
- */
 function notFound(res: ServerResponse): void {
   json(res, { error: 'Not found' }, 404);
 }
-
-/**
- * Handle incoming HTTP requests for the dashboard API and send responses for matched routes.
- *
- * Supported routes include CORS preflight, sessions, agents status, queue, usage by chatId,
- * config, voice sessions, and CRUD operations for persisted dashboard tasks.
- *
- * @returns `true` if the request was handled by this API handler (a response was sent), `false` otherwise.
- */
 
 export async function handleApiRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = new URL(req.url || '/', `http://${req.headers.host}`);
   const path = url.pathname;
   const method = req.method || 'GET';
 
-  // CORS preflight
   if (method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
@@ -131,34 +196,222 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     return true;
   }
 
-  // Only handle /api/* routes
   if (!path.startsWith('/api/')) return false;
 
-  // GET /api/sessions
   if (path === '/api/sessions' && method === 'GET') {
-    // sessionManager doesn't expose all sessions directly, but we can return
-    // what's available through session history
     const sessions: Record<string, unknown>[] = [];
-    // Return empty for now — the eventBus session events give real-time data
     json(res, { sessions });
     return true;
   }
 
-  // GET /api/agents/status
   if (path === '/api/agents/status' && method === 'GET') {
     json(res, { agents: [...agentStatuses.values()] });
     return true;
   }
 
-  // GET /api/queue
   if (path === '/api/queue' && method === 'GET') {
-    const queues: QueueInfo[] = [];
-    // We can't iterate all chatIds, but we track active ones via events
-    json(res, { queues });
+    json(res, { queues: listQueues() });
     return true;
   }
 
-  // GET /api/usage/:chatId
+  if (path === '/api/jobs' && method === 'GET') {
+    const limitRaw = parseInt(url.searchParams.get('limit') ?? '50', 10);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 200)) : 50;
+    const state = url.searchParams.get('state');
+    const jobs = snapshotToJobInfo(limit).filter((job) => (state ? job.state === state : true));
+    json(res, { jobs, metrics: jobRunner.getMetrics() });
+    return true;
+  }
+
+  const jobMatch = path.match(/^\/api\/jobs\/([^/]+)$/);
+  if (jobMatch && method === 'GET') {
+    const snap = jobRunner.get(jobMatch[1]);
+    if (!snap) {
+      notFound(res);
+      return true;
+    }
+    json(res, {
+      job: {
+        jobId: snap.jobId,
+        name: snap.name,
+        lane: snap.lane,
+        state: snap.state,
+        createdAt: snap.createdAt,
+        startedAt: snap.startedAt,
+        endedAt: snap.endedAt,
+        parentJobId: snap.parentJobId,
+        rootJobId: snap.rootJobId,
+        progress: snap.progress,
+        resultSummary: snap.resultSummary,
+        error: snap.error,
+        origin: snap.origin,
+      },
+    });
+    return true;
+  }
+
+  if (path === '/api/objectives' && method === 'GET') {
+    const state = url.searchParams.get('state');
+    const mode = url.searchParams.get('mode');
+    const chatIdParam = url.searchParams.get('chatId');
+    const parsedChatId = chatIdParam ? parseInt(chatIdParam, 10) : null;
+    const objectives = objectiveStore.list().filter((objective) => (
+      (state ? objective.state === state : true)
+      && (mode ? objective.mode === mode : true)
+      && (parsedChatId !== null && Number.isFinite(parsedChatId) ? objective.chatId === parsedChatId : true)
+    ));
+    json(res, { objectives });
+    return true;
+  }
+
+  const objectiveCancelMatch = path.match(/^\/api\/objectives\/([^/]+)\/cancel$/);
+  if (objectiveCancelMatch && method === 'POST') {
+    const canceled = await cancelObjectiveById(objectiveCancelMatch[1]);
+    if (!canceled) {
+      notFound(res);
+      return true;
+    }
+    json(res, { objective: canceled.objective, canceled: true, cancelledJobs: canceled.cancelledJobs });
+    return true;
+  }    const objectiveEventsMatch = path.match(/^\/api\/objectives\/([^/]+)\/events$/);
+    if (objectiveEventsMatch && method === 'GET') {
+      const objective = objectiveStore.get(objectiveEventsMatch[1]);
+      if (!objective) {
+        notFound(res);
+        return true;
+      }
+      const limitRaw = parseInt(url.searchParams.get('limit') ?? '200', 10);
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 2000)) : 200;
+      const cursorRaw = parseInt(url.searchParams.get('cursor') ?? '0', 10);
+      const page = objectiveEventStore.page(
+        objective.objectiveId,
+        Number.isFinite(cursorRaw) ? cursorRaw : 0,
+        limit,
+      );
+      json(res, {
+        objective,
+        total: page.total,
+        cursor: page.cursor,
+        nextCursor: page.nextCursor,
+        hasMore: page.hasMore,
+        events: page.events,
+      });
+      return true;
+    }
+
+
+
+  const objectiveMatch = path.match(/^\/api\/objectives\/([^/]+)$/);
+  if (objectiveMatch && method === 'GET') {
+    const objective = objectiveStore.get(objectiveMatch[1]);
+    if (!objective) {
+      notFound(res);
+      return true;
+    }
+    json(res, { objective });
+    return true;
+  }
+
+  const jobResultMatch = path.match(/^\/api\/jobs\/([^/]+)\/result$/);
+  if (jobResultMatch && method === 'GET') {
+    const snap = jobRunner.get(jobResultMatch[1]);
+    if (!snap) {
+      notFound(res);
+      return true;
+    }
+    json(res, {
+      jobId: snap.jobId,
+      state: snap.state,
+      resultSummary: snap.resultSummary ?? null,
+      artifacts: snap.artifacts ?? [],
+      error: snap.error ?? null,
+      endedAt: snap.endedAt ?? null,
+      finalText: snap.resultSummary ?? null,
+      changedFiles: (snap.artifacts ?? []).filter((artifact) => !artifact.startsWith('http')),
+      childSummaries: snap.childJobIds
+        .map((childId) => jobRunner.get(childId)?.resultSummary)
+        .filter((value): value is string => Boolean(value)),
+      delivery: snap.returnRoute
+        ? {
+            mode: snap.returnRoute.mode,
+            delivered: snap.state === 'succeeded',
+            channelId: snap.returnRoute.channelId,
+            threadId: snap.returnRoute.threadId,
+            userId: snap.returnRoute.userId,
+          }
+        : null,
+    });
+    return true;
+  }
+
+  const jobLogsMatch = path.match(/^\/api\/jobs\/([^/]+)\/logs$/);
+  if (jobLogsMatch && method === 'GET') {
+    const snap = jobRunner.get(jobLogsMatch[1]);
+    if (!snap) {
+      notFound(res);
+      return true;
+    }
+    const limitRaw = parseInt(url.searchParams.get('limit') ?? '200', 10);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 2000)) : 200;
+    const cursorRaw = parseInt(url.searchParams.get('cursor') ?? '0', 10);
+    const total = snap.logs?.length ?? 0;
+    const cursor = Number.isFinite(cursorRaw) ? Math.max(0, Math.min(cursorRaw, total)) : 0;
+    const logs = (snap.logs ?? []).slice(cursor, cursor + limit);
+    const nextCursor = cursor + logs.length;
+    json(res, {
+      jobId: snap.jobId,
+      state: snap.state,
+      total,
+      cursor,
+      nextCursor,
+      hasMore: nextCursor < total,
+      logs,
+    });
+    return true;
+  }
+
+  const jobEventsMatch = path.match(/^\/api\/jobs\/([^/]+)\/events$/);
+  if (jobEventsMatch && method === 'GET') {
+    const snap = jobRunner.get(jobEventsMatch[1]);
+    if (!snap) {
+      notFound(res);
+      return true;
+    }
+    const limitRaw = parseInt(url.searchParams.get('limit') ?? '200', 10);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 2000)) : 200;
+    const cursorRaw = parseInt(url.searchParams.get('cursor') ?? '0', 10);
+    const total = snap.events?.length ?? 0;
+    const cursor = Number.isFinite(cursorRaw) ? Math.max(0, Math.min(cursorRaw, total)) : 0;
+    const events = (snap.events ?? []).slice(cursor, cursor + limit);
+    const nextCursor = cursor + events.length;
+    json(res, {
+      jobId: snap.jobId,
+      state: snap.state,
+      total,
+      cursor,
+      nextCursor,
+      hasMore: nextCursor < total,
+      events,
+    });
+    return true;
+  }
+
+  const jobCancelMatch = path.match(/^\/api\/jobs\/([^/]+)\/cancel$/);
+  if (jobCancelMatch && method === 'POST') {
+    const result = cancelJobById(jobCancelMatch[1]);
+    if (!jobRunner.get(jobCancelMatch[1])) {
+      notFound(res);
+      return true;
+    }
+    json(res, result);
+    return true;
+  }
+
+  if (path === '/api/fleet/summary' && method === 'GET') {
+    json(res, buildFleetSummary());
+    return true;
+  }
+
   const usageMatch = path.match(/^\/api\/usage\/(-?\d+)$/);
   if (usageMatch && method === 'GET') {
     const chatId = parseInt(usageMatch[1], 10);
@@ -167,9 +420,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     return true;
   }
 
-  // GET /api/config
   if (path === '/api/config' && method === 'GET') {
-    // Return safe config values (no API keys)
     json(res, {
       botName: config.BOT_NAME,
       botMode: config.BOT_MODE,
@@ -182,14 +433,11 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     return true;
   }
 
-  // GET /api/voice/sessions
   if (path === '/api/voice/sessions' && method === 'GET') {
-    // Voice sessions tracked via eventBus events
     json(res, { sessions: [] });
     return true;
   }
 
-  // POST /api/tasks
   if (path === '/api/tasks' && method === 'POST') {
     const body = await parseBody(req) as Partial<DashboardTask>;
     const tasks = loadTasks();
@@ -210,13 +458,11 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     return true;
   }
 
-  // GET /api/tasks
   if (path === '/api/tasks' && method === 'GET') {
     json(res, { tasks: loadTasks() });
     return true;
   }
 
-  // PUT /api/tasks/:id
   const taskMatch = path.match(/^\/api\/tasks\/(task_\w+)$/);
   if (taskMatch && method === 'PUT') {
     const taskId = taskMatch[1];
@@ -230,7 +476,6 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     return true;
   }
 
-  // DELETE /api/tasks/:id
   if (taskMatch && method === 'DELETE') {
     const taskId = taskMatch[1];
     const tasks = loadTasks();

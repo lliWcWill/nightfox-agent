@@ -1,6 +1,12 @@
 import { createServer, type Server } from 'http';
 import { attachWebSocket } from './ws-server.js';
-import { handleApiRequest, agentStatuses } from './api.js';
+import {
+  handleApiRequest,
+  agentStatuses,
+  recordQueueDequeue,
+  recordQueueEnqueue,
+  recordQueueProcessing,
+} from './api.js';
 import { eventBus } from './event-bus.js';
 import { APP_SLUG } from '../utils/app-paths.js';
 
@@ -109,5 +115,17 @@ function wireAgentStatusTracking(): void {
     info.status = ev.isError ? 'error' : 'ready';
     info.currentActivity = undefined;
     info.lastActivity = ev.timestamp;
+  });
+
+  eventBus.on('queue:enqueue', (ev) => {
+    recordQueueEnqueue(ev);
+  });
+
+  eventBus.on('queue:dequeue', (ev) => {
+    recordQueueDequeue(ev);
+  });
+
+  eventBus.on('queue:processing', (ev) => {
+    recordQueueProcessing(ev);
   });
 }

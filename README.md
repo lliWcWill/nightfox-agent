@@ -2,7 +2,7 @@
 
 # Nightfox
 
-**Multi-platform AI agent system — Telegram, Discord, and real-time dashboard, powered by OpenAI.**
+**Multi-platform AI agent system — Telegram, Discord, and an in-repo Nightfox Ops dashboard, powered by OpenAI.**
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7+-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![OpenAI](https://img.shields.io/badge/OpenAI_Agents_SDK-GPT--5.3--Codex-412991?logo=openai&logoColor=white)](https://platform.openai.com/)
@@ -121,6 +121,12 @@ This is not a simple API wrapper. It's a real agentic runtime with tool access �
 - Streaming responses with tool call visibility (real-time progress display)
 - Tool action icons and detail extraction for all local + MCP tools
 
+### Nightfox Ops Dashboard
+- In-repo Next.js operator dashboard in `apps/dashboard`
+- Live fleet summary, queue pressure, and background job visibility
+- Machine-queryable API surface so Nightfox agents can inspect job and queue state
+- Shared runtime, same repo, same branch lifecycle as the bot backend
+
 ---
 
 ## Quick Start
@@ -175,6 +181,23 @@ npm run dev        # dev mode with hot reload
 ```
 
 Open your bot in Telegram or Discord.
+
+### Dashboard
+
+The Nightfox operator dashboard now lives in this repo under `apps/dashboard`.
+
+```bash
+cd apps/dashboard && npm install
+cd ../..
+npm run dashboard:dev
+```
+
+By default it connects to the Nightfox dashboard backend on:
+
+```bash
+http://localhost:3001
+ws://localhost:3001/ws
+```
 
 ---
 

@@ -14,6 +14,7 @@ import { config } from '../config.js';
 import { sessionManager } from '../claude/session-manager.js';
 import { setActiveQuery, clearActiveQuery, isCancelled } from '../claude/request-queue.js';
 import { eventBus } from '../dashboard/event-bus.js';
+import { extractToolCallId, sanitizeDashboardValue } from '../dashboard/payload-utils.js';
 import { contextMonitor } from '../claude/context-monitor.js';
 import { stripReasoningSummary } from './system-prompt.js';
 import { AgentCache } from './openai-agent-cache.js';
@@ -53,6 +54,8 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 
 const DEFAULT_CONTEXT_WINDOW = 400_000;
 
+type OpenAIStreamLogMode = 'off' | 'clean' | 'verbose';
+
 /** Available OpenAI models grouped by tier for /model command display. */
 export const OPENAI_MODEL_TIERS = {
   flagship: ['gpt-5.2', 'gpt-5.2-pro'] as const,
@@ -85,6 +88,18 @@ function getContextWindow(model: string): number {
   return MODEL_CONTEXT_WINDOWS[model] ?? DEFAULT_CONTEXT_WINDOW;
 }
 
+function getOpenAIStreamLogMode(): OpenAIStreamLogMode {
+  return config.OPENAI_STREAM_LOG_MODE;
+}
+
+function shouldLogOpenAIStreamSummary(): boolean {
+  return getOpenAIStreamLogMode() !== 'off';
+}
+
+function shouldLogOpenAIStreamVerbose(): boolean {
+  return getOpenAIStreamLogMode() === 'verbose';
+}
+
 /** Wraps an AbortController into the Cancellable interface for request-queue. */
 class AbortCancellable implements Cancellable {
   constructor(private readonly controller: AbortController) {}
@@ -104,6 +119,8 @@ interface ToolCallbackRef {
   onToolEnd?: AgentOptions['onToolEnd'];
   toolsUsed: string[];
   chatId: number;
+  activeToolCalls: Array<{ callId?: string; toolName: string; startedAt: number }>;
+  recentToolEnds: Array<{ callId?: string; toolName: string; endedAt: number }>;
 }
 
 
@@ -259,7 +276,14 @@ export class OpenAIProvider implements AgentProvider {
     const toolsUsed: string[] = [];
 
     // Update the mutable callback ref so lifecycle hooks target THIS turn
-    const callbackRef: ToolCallbackRef = { onToolStart, onToolEnd, toolsUsed, chatId };
+    const callbackRef: ToolCallbackRef = {
+      onToolStart,
+      onToolEnd,
+      toolsUsed,
+      chatId,
+      activeToolCalls: [],
+      recentToolEnds: [],
+    };
     this.toolCallbackRefs.set(chatId, callbackRef);
 
     eventBus.emit('agent:start', {
@@ -532,13 +556,18 @@ export class OpenAIProvider implements AgentProvider {
     onDelta: (delta: string) => void,
     chatId: number,
   ): void {
-    // Log non-text-delta events for visibility (text deltas are too noisy)
-    if (event.type === 'run_item_stream_event') {
+    // In clean mode, only log high-signal tool lifecycle summaries.
+    if (shouldLogOpenAIStreamVerbose() && event.type === 'run_item_stream_event') {
       const se = event as { name: string; item?: { type: string; rawItem?: Record<string, unknown> } };
       const toolName = se.item?.rawItem && typeof se.item.rawItem.name === 'string' ? ` tool=${se.item.rawItem.name}` : '';
       console.log(`[OpenAI Stream] ${se.name} (${se.item?.type || 'unknown'})${toolName}`);
-    } else if (event.type === 'raw_model_stream_event' && event.data.type !== 'output_text_delta') {
-      // Log raw events that aren't text deltas (function calls, reasoning, etc.)
+    } else if (
+      shouldLogOpenAIStreamVerbose() &&
+      event.type === 'raw_model_stream_event' &&
+      event.data.type !== 'output_text_delta'
+    ) {
+      // Verbose-only raw event logging. Clean mode intentionally suppresses
+      // noisy low-signal events like repeated `model` messages.
       const rawType = event.data.type;
       console.log(`[OpenAI Raw] ${rawType}`);
     }
@@ -558,42 +587,179 @@ export class OpenAIProvider implements AgentProvider {
       const streamEvent = event as { name: string; item: { type: string; rawItem?: Record<string, unknown> } };
       const { name, item } = streamEvent;
 
-      if (name === 'tool_call_item_created' && item?.type === 'tool_call_item' && item.rawItem) {
-        const raw = item.rawItem;
-        const toolName = typeof raw.name === 'string' ? raw.name : 'unknown';
-        console.log(`[OpenAI Stream] Tool call: ${toolName}`);
-        let toolInput: Record<string, unknown> | undefined;
-        if (typeof raw.arguments === 'string') {
-          try { toolInput = JSON.parse(raw.arguments) as Record<string, unknown>; } catch { /* partial args */ }
+        if (name === 'tool_call_item_created' && item?.type === 'tool_call_item' && item.rawItem) {
+          const raw = item.rawItem;
+          const toolName = typeof raw.name === 'string' ? raw.name : 'unknown';
+          if (shouldLogOpenAIStreamSummary()) {
+            console.log(`[OpenAI Stream] Tool call: ${toolName}`);
+          }
+          let toolInput: Record<string, unknown> | undefined;
+          if (typeof raw.arguments === 'string') {
+            try { toolInput = JSON.parse(raw.arguments) as Record<string, unknown>; } catch { /* partial args */ }
+          }
+
+          const ref = this.toolCallbackRefs.get(chatId);
+          if (ref) {
+            this.emitToolStart(ref, {
+              toolName,
+              callId: extractToolCallId(raw),
+              input: toolInput,
+              timestamp: Date.now(),
+            });
+          }
         }
 
-        const ref = this.toolCallbackRefs.get(chatId);
-        if (ref) {
-          if (!ref.toolsUsed.includes(toolName)) {
-            ref.toolsUsed.push(toolName);
+        if (name === 'tool_output_item_created') {
+          if (shouldLogOpenAIStreamVerbose()) {
+            const raw = item?.rawItem;
+            const toolName = raw && typeof raw.name === 'string' ? raw.name : 'unknown';
+            console.log(`[OpenAI Stream] Tool output: ${toolName}`);
           }
-          ref.onToolStart?.(toolName, toolInput);
-          eventBus.emit('agent:tool_start', {
-            chatId,
-            toolName,
-            input: toolInput,
-            timestamp: Date.now(),
-          });
+          const ref = this.toolCallbackRefs.get(chatId);
+          if (ref) {
+            const raw = item?.rawItem;
+            this.emitToolEnd(ref, {
+              toolName: raw && typeof raw.name === 'string' ? raw.name : undefined,
+              callId: extractToolCallId(raw),
+              output: raw,
+              timestamp: Date.now(),
+            });
+          }
         }
       }
+  }
 
-      if (name === 'tool_output_item_created') {
-        const ref = this.toolCallbackRefs.get(chatId);
-        if (ref) {
-          ref.onToolEnd?.();
-          eventBus.emit('agent:tool_end', {
-            chatId,
-            toolName: 'unknown',
-            timestamp: Date.now(),
-          });
+  private pruneRecentToolEnds(ref: ToolCallbackRef, timestamp: number): void {
+    ref.recentToolEnds = ref.recentToolEnds.filter((entry) => timestamp - entry.endedAt < 2_000);
+  }
+
+  private hasRecentToolEnd(
+    ref: ToolCallbackRef,
+    callId: string | undefined,
+    toolName: string,
+    timestamp: number,
+  ): boolean {
+    this.pruneRecentToolEnds(ref, timestamp);
+
+    return ref.recentToolEnds.some((entry) => {
+      if (callId && entry.callId && entry.callId === callId) {
+        return true;
+      }
+      return !callId && !entry.callId && entry.toolName === toolName && timestamp - entry.endedAt < 250;
+    });
+  }
+
+  private emitToolStart(
+    ref: ToolCallbackRef,
+    payload: {
+      toolName: string;
+      input?: Record<string, unknown>;
+      callId?: string;
+      timestamp: number;
+    },
+  ): void {
+    const hasActiveDuplicate = ref.activeToolCalls.some((entry) => {
+      if (payload.callId && entry.callId) {
+        return entry.callId === payload.callId;
+      }
+      return !payload.callId && entry.toolName === payload.toolName && payload.timestamp - entry.startedAt < 250;
+    });
+    if (hasActiveDuplicate) {
+      return;
+    }
+
+    ref.activeToolCalls.push({
+      callId: payload.callId,
+      toolName: payload.toolName,
+      startedAt: payload.timestamp,
+    });
+
+    if (!ref.toolsUsed.includes(payload.toolName)) {
+      ref.toolsUsed.push(payload.toolName);
+    }
+
+    ref.onToolStart?.(payload.toolName, payload.input);
+    eventBus.emit('agent:tool_start', {
+      chatId: ref.chatId,
+      toolName: payload.toolName,
+      callId: payload.callId,
+      input: payload.input,
+      timestamp: payload.timestamp,
+    });
+  }
+
+  private resolveActiveToolCall(
+    ref: ToolCallbackRef,
+    callId: string | undefined,
+    toolName: string | undefined,
+  ): { callId?: string; toolName: string } | undefined {
+    let index = -1;
+
+    if (callId) {
+      index = ref.activeToolCalls.findIndex((entry) => entry.callId === callId);
+    }
+
+    if (index === -1 && toolName) {
+      for (let i = ref.activeToolCalls.length - 1; i >= 0; i -= 1) {
+        if (ref.activeToolCalls[i]?.toolName === toolName) {
+          index = i;
+          break;
         }
       }
     }
+
+    if (index === -1 && ref.activeToolCalls.length > 0) {
+      index = ref.activeToolCalls.length - 1;
+    }
+
+    if (index === -1) {
+      if (!toolName) {
+        return undefined;
+      }
+      return { callId, toolName };
+    }
+
+    const [resolved] = ref.activeToolCalls.splice(index, 1);
+    return resolved;
+  }
+
+  private emitToolEnd(
+    ref: ToolCallbackRef,
+    payload: {
+      toolName?: string;
+      callId?: string;
+      output?: unknown;
+      error?: string;
+      status?: 'completed' | 'error';
+      timestamp: number;
+      durationMs?: number;
+    },
+  ): void {
+    const resolved = this.resolveActiveToolCall(ref, payload.callId, payload.toolName);
+    const toolName = payload.toolName || resolved?.toolName || 'unknown';
+    const callId = payload.callId || resolved?.callId;
+
+    if (this.hasRecentToolEnd(ref, callId, toolName, payload.timestamp)) {
+      return;
+    }
+
+    ref.recentToolEnds.push({
+      callId,
+      toolName,
+      endedAt: payload.timestamp,
+    });
+
+    ref.onToolEnd?.();
+    eventBus.emit('agent:tool_end', {
+      chatId: ref.chatId,
+      toolName,
+      callId,
+      status: payload.status ?? (payload.error ? 'error' : 'completed'),
+      output: sanitizeDashboardValue(payload.output),
+      error: payload.error,
+      durationMs: payload.durationMs,
+      timestamp: payload.timestamp,
+    });
   }
 
   /**
@@ -607,41 +773,41 @@ export class OpenAIProvider implements AgentProvider {
     if (this.hookedAgents.has(agent)) return;
     this.hookedAgents.add(agent);
 
-    agent.on('agent_tool_start', (_ctx, tool, details) => {
-      const callItem = details?.toolCall;
-      const toolName = tool?.name || ('name' in callItem ? String(callItem.name) : 'unknown');
-      const ref = this.findCallbackRefForAgent(agent);
-      if (ref) {
-        if (!ref.toolsUsed.includes(toolName)) {
-          ref.toolsUsed.push(toolName);
+      agent.on('agent_tool_start', (_ctx, tool, details) => {
+        const callItem = details?.toolCall;
+        const toolName =
+          tool?.name ||
+          (callItem && 'name' in callItem ? String(callItem.name) : 'unknown');
+        const ref = this.findCallbackRefForAgent(agent);
+        if (ref) {
+          let toolInput: Record<string, unknown> | undefined;
+          if (callItem && 'arguments' in callItem && typeof callItem.arguments === 'string') {
+            try { toolInput = JSON.parse(callItem.arguments) as Record<string, unknown>; } catch { /* ignore parse errors */ }
+          }
+          this.emitToolStart(ref, {
+            toolName,
+            callId: extractToolCallId(callItem),
+            input: toolInput,
+            timestamp: Date.now(),
+          });
         }
-        let toolInput: Record<string, unknown> | undefined;
-        if (callItem && 'arguments' in callItem && typeof callItem.arguments === 'string') {
-          try { toolInput = JSON.parse(callItem.arguments) as Record<string, unknown>; } catch { /* ignore parse errors */ }
-        }
-        ref.onToolStart?.(toolName, toolInput);
-        eventBus.emit('agent:tool_start', {
-          chatId: ref.chatId,
-          toolName,
-          input: toolInput,
-          timestamp: Date.now(),
-        });
-      }
-    });
+      });
 
-    agent.on('agent_tool_end', (_ctx, tool, _result, details) => {
-      const callItem = details?.toolCall;
-      const toolName = tool?.name || ('name' in callItem ? String(callItem.name) : 'unknown');
-      const ref = this.findCallbackRefForAgent(agent);
-      if (ref) {
-        ref.onToolEnd?.();
-        eventBus.emit('agent:tool_end', {
-          chatId: ref.chatId,
-          toolName,
-          timestamp: Date.now(),
-        });
-      }
-    });
+      agent.on('agent_tool_end', (_ctx, tool, result, details) => {
+        const callItem = details?.toolCall;
+        const toolName =
+          tool?.name ||
+          (callItem && 'name' in callItem ? String(callItem.name) : 'unknown');
+        const ref = this.findCallbackRefForAgent(agent);
+        if (ref) {
+          this.emitToolEnd(ref, {
+            toolName,
+            callId: extractToolCallId(callItem),
+            output: result,
+            timestamp: Date.now(),
+          });
+        }
+      });
   }
 
   /** Find the current tool callback ref for the chat that owns this Agent. */

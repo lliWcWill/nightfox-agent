@@ -8,7 +8,7 @@ import { APP_NAME, resolveEnvPath } from './utils/app-paths.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultEnvPath = path.resolve(__dirname, '..', '.env');
 const envPath = resolveEnvPath(defaultEnvPath);
-loadEnv({ path: envPath });
+loadEnv({ path: envPath, quiet: true });
 
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().default(''),
@@ -22,6 +22,8 @@ const envSchema = z.object({
   // Agent provider: 'claude' (Claude Agent SDK) or 'openai' (OpenAI Agents SDK)
   AGENT_PROVIDER: z.enum(['claude', 'openai']).default('claude'),
   OPENAI_DEFAULT_MODEL: z.string().default('gpt-5.4'),
+  OPENAI_STREAM_LOG_MODE: z.enum(['off', 'clean', 'verbose']).default('clean'),
+  OPENAI_TOOL_LOG_DETAIL: z.enum(['off', 'level1', 'level2']).default('level1'),
   // MCP servers
   MCP_MEMORY_COMMAND: z.string().default(''),
   MCP_MEMORY_ARGS: z.string().default(''),  // JSON array, e.g. '["start"]'

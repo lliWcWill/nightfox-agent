@@ -6,6 +6,17 @@ export type JobLane = 'main' | 'subagent' | 'review' | 'maintenance';
 
 export type JobPlatform = 'discord' | 'telegram';
 
+export type JobReturnRoute = {
+  platform: JobPlatform;
+  channelId: string;
+  threadId?: string;
+  guildId?: string;
+  userId: string;
+  parentChatId?: number;
+  mode: 'origin' | 'parent-session';
+  capturedAt: number;
+};
+
 export type AgentDeepLoopResumeSpec = {
   kind: 'agent-deep-loop';
   payload: {
@@ -60,6 +71,7 @@ export type JobEvent =
       stallTimeoutMs?: number;
       resumeSpec?: JobResumeSpec;
       handoff?: JobHandoff;
+      returnRoute?: JobReturnRoute;
     }
   | { type: 'job:origin'; jobId: string; origin: JobOrigin; at: number }
   | { type: 'job:idempotency'; jobId: string; key: string; at: number }
@@ -95,10 +107,12 @@ export type JobSnapshot = {
   endedAt?: number;
   state: JobState;
   origin: JobOrigin;
+  returnRoute?: JobReturnRoute;
   progress?: string;
   exitCode?: number | null;
   error?: string;
   logs: Array<{ at: number; level: JobLogLevel; message: string }>;
+  events: JobEvent[];
   resultSummary?: string;
   artifacts?: string[];
 };
@@ -109,6 +123,7 @@ export type JobRunContext = {
   parentJobId?: string;
   rootJobId: string;
   origin: JobOrigin;
+  returnRoute?: JobReturnRoute;
   signal: AbortSignal;
   progress: (message: string) => void;
   log: (level: JobLogLevel, message: string) => void;

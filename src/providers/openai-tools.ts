@@ -24,6 +24,7 @@ import { getApprovalDecision } from '../jobs/core/approval-policy.js';
 import { prepareAgentDeepLoopJob, prepareCodeRabbitReviewJob } from '../jobs/core/job-definitions.js';
 import { config } from '../config.js';
 import { delegatedSessionId } from '../discord/id-mapper.js';
+import { objectiveEventStore, objectiveStore } from '../autonomy/index.js';
 import { getCurrentToolChatId, getCurrentToolJobId, getCurrentToolOrigin } from './openai-tool-context.js';
 
 import type { Tool } from '@openai/agents-core';
@@ -709,6 +710,19 @@ function createDelegatedChildChatId(parentChatId: number, task: string, model?: 
   return delegatedSessionId(`${parentChatId}:${model ?? 'spark'}:${task}:${crypto.randomUUID()}`);
 }
 
+function buildReturnRoute(chatId: number | null | undefined, origin: { guildId?: string; channelId: string; threadId?: string; userId: string }, mode: 'origin' | 'parent-session') {
+  return {
+    platform: 'discord' as const,
+    channelId: origin.channelId,
+    threadId: origin.threadId,
+    guildId: typeof (origin as any).guildId === 'string' ? (origin as any).guildId : undefined,
+    userId: origin.userId,
+    parentChatId: typeof chatId === 'number' ? chatId : undefined,
+    mode,
+    capturedAt: Date.now(),
+  };
+}
+
 function createDelegateDeepTaskTool() {
   return tool({
     name: 'delegate_deep_task',
@@ -737,7 +751,7 @@ function createDelegateDeepTaskTool() {
           : delegatedSessionId(makeStableHeadlessSeed('parent-chat', `${trimmed}:${requestedModel}:${max_iterations ?? ''}`));
         const childChatId = createDelegatedChildChatId(effectiveParentChatId, trimmed, requestedModel);
         const timeoutMs = 1000 * 60 * 30;
-        const handoff = parentJobId && typeof chatId === 'number'
+        const handoff = typeof chatId === 'number'
           ? { mode: 'parent-session' as const, parentChatId: effectiveParentChatId, platform: 'discord' as const }
           : undefined;
         const job = prepareAgentDeepLoopJob({
@@ -766,6 +780,11 @@ function createDelegateDeepTaskTool() {
           return '[error] delegate_deep_task unavailable: ' + (originResolved.error ?? 'missing origin');
         }
         const origin = originResolved.origin;
+        const returnRoute = buildReturnRoute(
+          typeof chatId === 'number' ? effectiveParentChatId : chatId,
+          origin,
+          handoff ? 'parent-session' : 'origin',
+        );
 
         const idempotencyKey = makeIdempotencyKey('agent:autonomous-deep-loop', origin, {
           chatId: typeof chatId === 'number' ? chatId : null,
@@ -790,7 +809,24 @@ function createDelegateDeepTaskTool() {
           parentJobId,
           resumeSpec: job.resumeSpec,
           handoff: job.handoff,
+          returnRoute,
         });
+        if (typeof chatId === 'number') {
+          objectiveStore.create({
+            chatId: effectiveParentChatId,
+            platform: 'discord',
+            channelId: origin.channelId,
+            threadId: origin.threadId,
+            guildId: typeof (origin as any).guildId === 'string' ? (origin as any).guildId : undefined,
+            userId: origin.userId,
+            summary: trimmed,
+            nextActions: ['Wait for delegated job completion.'],
+            parentJobId,
+            childJobIds: [jobId],
+            returnRoute,
+            budget: { maxAutonomyMinutes: 15, maxDelegations: 3, maxFollowups: 3 },
+          });
+        }
 
         return JSON.stringify({
           status: 'queued',
@@ -840,6 +876,11 @@ function createDelegateCodeRabbitReviewTool(cwd: string) {
           return '[error] delegate_coderabbit_review unavailable: ' + (toolOriginResolved.error ?? 'missing origin');
         }
         const toolOrigin = toolOriginResolved.origin;
+        const returnRoute = buildReturnRoute(
+          chatId,
+          toolOrigin,
+          typeof chatId === 'number' ? 'parent-session' : 'origin',
+        );
 
         const jobIds = targets.map((t) => {
           const idempotencyKey = makeIdempotencyKey('coderabbit-review', toolOrigin, {
@@ -851,7 +892,7 @@ function createDelegateCodeRabbitReviewTool(cwd: string) {
           const timeoutMs = 1000 * 60 * 20;
           const job = prepareCodeRabbitReviewJob({
             timeoutMs,
-            handoff: parentJobId && typeof chatId === 'number'
+            handoff: typeof chatId === 'number'
               ? { mode: 'parent-session', parentChatId: chatId, platform: 'discord' }
               : undefined,
             payload: {
@@ -866,7 +907,7 @@ function createDelegateCodeRabbitReviewTool(cwd: string) {
           if (decision.requiresApproval) {
             throw new Error(`${jobName} requires approval (${decision.reason}). Run via /devops for approval flow.`);
           }
-          return jobRunner.enqueue({
+          const jobId = jobRunner.enqueue({
             name: job.name,
             lane: job.lane,
             origin: toolOrigin,
@@ -876,7 +917,25 @@ function createDelegateCodeRabbitReviewTool(cwd: string) {
             parentJobId,
             resumeSpec: job.resumeSpec,
             handoff: job.handoff,
+            returnRoute,
           });
+          if (typeof chatId === 'number') {
+            objectiveStore.create({
+              chatId,
+              platform: 'discord',
+              channelId: toolOrigin.channelId,
+              threadId: toolOrigin.threadId,
+              guildId: typeof (toolOrigin as any).guildId === 'string' ? (toolOrigin as any).guildId : undefined,
+              userId: toolOrigin.userId,
+              summary: `CodeRabbit review (${t}) for ${repoPath}`,
+              nextActions: ['Wait for review completion.'],
+              parentJobId,
+              childJobIds: [jobId],
+              returnRoute,
+              budget: { maxAutonomyMinutes: 15, maxDelegations: 2, maxFollowups: 2 },
+            });
+          }
+          return jobId;
         });
 
         return JSON.stringify({
@@ -931,7 +990,7 @@ function createDelegateCodexHighReviewTool() {
           name: 'agent:codex-high-review',
           lane: 'review',
           timeoutMs,
-          handoff: parentJobId && typeof chatId === 'number'
+          handoff: typeof chatId === 'number'
             ? { mode: 'parent-session', parentChatId: effectiveParentChatId, platform: 'discord' }
             : undefined,
           payload: {
@@ -955,6 +1014,11 @@ function createDelegateCodexHighReviewTool() {
           return '[error] delegate_codex_high_review unavailable: ' + (originResolved.error ?? 'missing origin');
         }
         const origin = originResolved.origin;
+        const returnRoute = buildReturnRoute(
+          typeof chatId === 'number' ? effectiveParentChatId : chatId,
+          origin,
+          typeof chatId === 'number' ? 'parent-session' : 'origin',
+        );
 
         const idempotencyKey = makeIdempotencyKey('agent:codex-high-review', origin, {
           chatId: typeof chatId === 'number' ? chatId : null,
@@ -979,7 +1043,24 @@ function createDelegateCodexHighReviewTool() {
           parentJobId,
           resumeSpec: job.resumeSpec,
           handoff: job.handoff,
+          returnRoute,
         });
+        if (typeof chatId === 'number') {
+          objectiveStore.create({
+            chatId: effectiveParentChatId,
+            platform: 'discord',
+            channelId: origin.channelId,
+            threadId: origin.threadId,
+            guildId: typeof (origin as any).guildId === 'string' ? (origin as any).guildId : undefined,
+            userId: origin.userId,
+            summary: trimmed,
+            nextActions: ['Wait for high-review completion.'],
+            parentJobId,
+            childJobIds: [jobId],
+            returnRoute,
+            budget: { maxAutonomyMinutes: 15, maxDelegations: 2, maxFollowups: 2 },
+          });
+        }
 
         return JSON.stringify({
           status: 'queued',
