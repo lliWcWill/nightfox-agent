@@ -1,5 +1,6 @@
 import { EmbedBuilder } from 'discord.js';
 import { config } from '../config.js';
+import { getActiveContextTokens, getContextUsagePercent } from '../providers/usage-math.js';
 
 /** A channel that supports sending messages. */
 type SendableChannel = { send: (...args: any[]) => Promise<any> };
@@ -55,18 +56,16 @@ export async function sendUsageNotice(
 ): Promise<void> {
   if (!config.CONTEXT_SHOW_USAGE || !usage) return;
 
-  const used = usage.inputTokens + usage.outputTokens + usage.cacheReadTokens;
-  const pct = usage.contextWindow > 0
-    ? Math.round((used / usage.contextWindow) * 100)
-    : 0;
+  const activeTokens = getActiveContextTokens(usage);
+  const pct = getContextUsagePercent(usage);
 
   const color = pct >= 80 ? 0xED4245 : pct >= 60 ? 0xFEE75C : 0x57F287;
   const embed = new EmbedBuilder()
     .setColor(color)
     .setTitle('🧠 Context Status')
     .setDescription(
-      `**${pct}% context used** · **${fmtTokens(used)} / ${fmtTokens(usage.contextWindow)}**\n`
-      + `Turns: **${usage.numTurns}**`,
+      `**${pct}% context used** · **${fmtTokens(activeTokens)} / ${fmtTokens(usage.contextWindow)}**\n`
+      + `Cache read: **${fmtTokens(usage.cacheReadTokens)}** · Turns: **${usage.numTurns}**`,
     )
     .setTimestamp();
 

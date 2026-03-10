@@ -459,24 +459,36 @@ export class OpenAIProvider implements AgentProvider {
         });
       }
 
+      const overflowRetryAlreadyTried = Boolean(options._contextOverflowRetryTried);
       const isContextOverflow = /context window|context_length_exceeded|maximum context length|input exceeds/i.test(errorMessage);
-      if (isContextOverflow) {
-        const overflowCompaction = this.forceCompactHistory(agentState.history, contextWindow);
-        if (overflowCompaction) {
-          console.warn(`[OpenAI] Context overflow detected. Retrying once after compaction (${overflowCompaction.preTokens} tokens).`);
+      if (isContextOverflow && !overflowRetryAlreadyTried) {
+        const compactedHistory = this.buildCompactedHistory(agentState.history, contextWindow, true);
+        if (compactedHistory) {
+          console.warn(`[OpenAI] Context overflow detected. Retrying once after compaction (${compactedHistory.compaction.preTokens} tokens).`);
           emitProviderEvent('context_overflow_retry', {
             errorMessage,
             effectiveModel,
-            compactedPreTokens: overflowCompaction.preTokens,
+            compactedPreTokens: compactedHistory.compaction.preTokens,
           });
           eventBus.emit('agent:error', {
             chatId,
             error: `${errorMessage} (retrying after compaction)`,
             timestamp: Date.now(),
           });
-          const retry = await this.send(chatId, message, options);
-          if (!retry.compaction) retry.compaction = overflowCompaction;
-          return retry;
+
+          const previousHistory = agentState.history;
+          agentState.history = compactedHistory.history;
+          try {
+            const retry = await this.send(chatId, message, {
+              ...options,
+              _contextOverflowRetryTried: true,
+            });
+            if (!retry.compaction) retry.compaction = compactedHistory.compaction;
+            return retry;
+          } catch (retryError) {
+            agentState.history = previousHistory;
+            throw retryError;
+          }
         }
       }
 
@@ -537,22 +549,23 @@ export class OpenAIProvider implements AgentProvider {
   }
 
   private maybeCompactHistory(history: HistoryItem[], contextWindow: number): AgentResponse['compaction'] | undefined {
-    const estimated = this.estimateHistoryTokens(history);
-    const threshold = Math.floor(contextWindow * 0.6);
-    if (estimated < threshold) return undefined;
-    return this.compactHistory(history, estimated);
+    const compacted = this.buildCompactedHistory(history, contextWindow, false);
+    if (!compacted) return undefined;
+    history.splice(0, history.length, ...compacted.history);
+    return compacted.compaction;
   }
 
-  private forceCompactHistory(history: HistoryItem[], contextWindow: number): AgentResponse['compaction'] | undefined {
+  private buildCompactedHistory(
+    history: HistoryItem[],
+    contextWindow: number,
+    force: boolean,
+  ): { history: HistoryItem[]; compaction: NonNullable<AgentResponse['compaction']> } | undefined {
     if (history.length < 4) return undefined;
-    const estimated = this.estimateHistoryTokens(history);
-    const threshold = Math.floor(contextWindow * 0.35);
-    if (estimated <= threshold && history.length <= 8) return undefined;
-    return this.compactHistory(history, estimated);
-  }
 
-  private compactHistory(history: HistoryItem[], preTokens: number): AgentResponse['compaction'] | undefined {
-    if (history.length < 4) return undefined;
+    const estimated = this.estimateHistoryTokens(history);
+    const threshold = Math.floor(contextWindow * (force ? 0.35 : 0.6));
+    if (!force && estimated < threshold) return undefined;
+    if (force && estimated <= threshold && history.length <= 8) return undefined;
 
     const keepCount = Math.min(6, history.length);
     const splitIndex = Math.max(2, history.length - keepCount);
@@ -579,8 +592,10 @@ export class OpenAIProvider implements AgentProvider {
       ].join('\n'),
     };
 
-    history.splice(0, history.length, summary, ...newer);
-    return { trigger: 'auto', preTokens };
+    return {
+      history: [summary, ...newer],
+      compaction: { trigger: 'auto', preTokens: estimated },
+    };
   }
 
   /**

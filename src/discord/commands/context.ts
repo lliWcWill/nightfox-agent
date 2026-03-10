@@ -4,25 +4,14 @@ import { discordChatId } from '../id-mapper.js';
 import { sessionManager } from '../../claude/session-manager.js';
 import { getCachedUsage } from '../../claude/agent.js';
 import { config } from '../../config.js';
+import { getActiveContextTokens, getContextUsagePercent, getTotalUsageTokens } from '../../providers/usage-math.js';
 
-/**
- * Format a token count into a compact, human-readable string using metric suffixes.
- *
- * @param n - The token count to format
- * @returns For values >= 1,000,000: a string like `X.XM`; for values >= 1,000: `X.Xk`; otherwise the integer as a string
- */
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
   return String(n);
 }
 
-/**
- * Render a 10-segment progress bar prefixed with a colored status emoji.
- *
- * @param pct - Percentage value (expected 0–100); values outside this range are clamped.
- * @returns A string containing a color emoji (`🟢`, `🟡`, or `🔴`) followed by a bracketed bar of ten segments where filled segments are `█` and empty segments are `░`.
- */
 function getProgressBar(pct: number): string {
   const clamped = Math.min(100, Math.max(0, pct));
   const filled = Math.round(clamped / 10);
@@ -31,16 +20,6 @@ function getProgressBar(pct: number): string {
   return color + ' [' + '█'.repeat(filled) + '░'.repeat(empty) + ']';
 }
 
-/**
- * Parse raw Claude `/context` CLI output into a concise, user-facing summary.
- *
- * Parses the input for a model line, a total/tokens line, and per-category token usage
- * (lines matching `name  tokens  (percent)`) and formats those pieces into a markdown-friendly
- * "Context Usage" report. If no parseable structured data is found, returns a raw snippet.
- *
- * @param raw - Raw stdout/stderr text produced by the Claude CLI `/context` request
- * @returns A formatted summary containing model, total tokens line, and per-category usage when parseable; the literal string `"No context output received."` if `raw` is empty; otherwise a code block with the first 1800 characters of the raw output when structured data could not be parsed.
- */
 function parseContextOutput(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return 'No context output received.';
@@ -84,21 +63,12 @@ function parseContextOutput(raw: string): string {
   }
 
   if (parts.length === 1) {
-    // Couldn't parse structured output — return raw
     return `**Context Output**\n\`\`\`\n${trimmed.slice(0, 1800)}\n\`\`\``;
   }
 
   return parts.join('\n');
 }
 
-/**
- * Fetches the Claude session context by invoking the Claude CLI `/context` command for a given session.
- *
- * @param sessionId - The Claude session identifier to query.
- * @param cwd - Working directory to run the Claude executable in.
- * @returns The trimmed CLI output (stdout if present, otherwise stderr) from the `/context` command.
- * @throws An `Error` containing the CLI stderr or the underlying process error message if the command fails or exits with an error.
- */
 async function runClaudeContext(sessionId: string, cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
@@ -122,18 +92,6 @@ async function runClaudeContext(sessionId: string, cwd: string): Promise<string>
   });
 }
 
-/**
- * Handle the `/context` command by presenting current Claude session context usage.
- *
- * Replies with cached context usage when available; otherwise queries the Claude CLI
- * for live context and updates the interaction with the formatted result.
- *
- * If no active session exists, replies ephemerally instructing the user to start one.
- * If a Claude session ID is missing, replies ephemerally instructing the user to send a message to Claude first.
- * On CLI errors, edits the deferred reply with an error message.
- *
- * @param interaction - The Discord chat input interaction that invoked the command
- */
 export async function handleContext(interaction: ChatInputCommandInteraction): Promise<void> {
   const chatId = discordChatId(interaction.user.id);
 
@@ -146,15 +104,11 @@ export async function handleContext(interaction: ChatInputCommandInteraction): P
     return;
   }
 
-  // Try cached SDK usage first (instant)
   const cached = getCachedUsage(chatId);
   if (cached) {
-    // Active context = input + output (cache reads are stored outside the active window)
-    const activeTokens = cached.inputTokens + cached.outputTokens;
-    const totalTokens = activeTokens + cached.cacheReadTokens + cached.cacheWriteTokens;
-    const pct = cached.contextWindow > 0
-      ? Math.round((activeTokens / cached.contextWindow) * 100)
-      : 0;
+    const activeTokens = getActiveContextTokens(cached);
+    const totalTokens = getTotalUsageTokens(cached);
+    const pct = getContextUsagePercent(cached);
     const bar = getProgressBar(pct);
 
     const output = `**Context Usage**\n\n`
@@ -174,7 +128,6 @@ export async function handleContext(interaction: ChatInputCommandInteraction): P
     return;
   }
 
-  // Fallback: CLI shell-out
   if (!session.claudeSessionId) {
     await interaction.reply({
       content: 'No Claude session ID found. Send a message to Claude first, then run `/context` again.',

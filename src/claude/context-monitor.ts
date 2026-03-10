@@ -2,6 +2,7 @@ import { Api } from 'grammy';
 import { escapeMarkdownV2 } from '../telegram/markdown.js';
 import { eventBus } from '../dashboard/event-bus.js';
 import type { AgentCompleteEvent } from '../dashboard/types.js';
+import { getActiveContextTokens, getRemainingContextPercent } from '../providers/usage-math.js';
 
 /**
  * Context Monitor — fires independent Telegram alerts when context window runs low.
@@ -67,13 +68,11 @@ export class ContextMonitor {
     if (!this.api || !event.usage) return;
 
     const { chatId } = event;
-    const { inputTokens, outputTokens, cacheReadTokens, contextWindow } = event.usage;
+    const { contextWindow } = event.usage;
 
     if (contextWindow <= 0) return;
 
-    // Active context = input + output (cache reads don't consume context window)
-    const usedTokens = inputTokens + outputTokens;
-    const remainingPct = Math.round(Math.max(0, Math.min(100, ((contextWindow - usedTokens) / contextWindow) * 100)));
+    const remainingPct = getRemainingContextPercent(event.usage);
 
     // Get or create state for this chat
     let state = this.states.get(chatId);
@@ -109,7 +108,7 @@ export class ContextMonitor {
       ? 'CRITICAL — context almost exhausted'
       : 'LOW CONTEXT WARNING';
 
-    const usedTokens = usage.inputTokens + usage.outputTokens;
+    const usedTokens = getActiveContextTokens(usage);
     const usedStr = this.formatTokens(usedTokens);
     const totalStr = this.formatTokens(usage.contextWindow);
 
