@@ -1,4 +1,4 @@
-import { createServer, type Server } from 'http';
+import { createServer, type Server, type ServerResponse } from 'http';
 import { attachWebSocket } from './ws-server.js';
 import {
   handleApiRequest,
@@ -9,25 +9,46 @@ import {
 } from './api.js';
 import { eventBus } from './event-bus.js';
 import { APP_SLUG } from '../utils/app-paths.js';
+import { DEFAULT_DASHBOARD_PORT } from '../config.js';
 
 let server: Server | null = null;
+const DASHBOARD_HEALTH_PATH = '/healthz';
+
+function writeDashboardJson(
+  res: ServerResponse,
+  status: number,
+  body: Record<string, unknown>,
+): void {
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.end(JSON.stringify(body));
+}
 
 /**
  * Start and configure the dashboard HTTP server, attach WebSocket support, and initialize agent status tracking.
  *
- * Non-API requests receive a JSON health response and CORS headers. The server listens on the provided port (defaults to 3001).
+ * The backend serves an explicit JSON health response at `/healthz`. Other non-API HTTP requests keep the legacy JSON
+ * status response so existing callers do not break. The server listens on the provided port (defaults to 3011).
  *
  * @returns The created Node HTTP `Server` instance
  */
-export function startDashboardServer(port: number = 3001): Server {
+export function startDashboardServer(port: number = DEFAULT_DASHBOARD_PORT): Server {
   server = createServer(async (req, res) => {
     const handled = await handleApiRequest(req, res);
     if (!handled) {
-      res.writeHead(200, {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      });
-        res.end(JSON.stringify({ status: 'ok', service: `${APP_SLUG}-dashboard` }));
+      const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+      if (url.pathname === DASHBOARD_HEALTH_PATH) {
+        writeDashboardJson(res, 200, {
+          status: 'ok',
+          service: `${APP_SLUG}-dashboard`,
+          endpoint: 'healthz',
+        });
+        return;
+      }
+
+      writeDashboardJson(res, 200, { status: 'ok', service: `${APP_SLUG}-dashboard` });
     }
   });
 
