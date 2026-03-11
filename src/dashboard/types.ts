@@ -1,6 +1,7 @@
 import type { JobEvent } from '../jobs/core/job-types.js';
 import type { ObjectiveEvent } from '../autonomy/objective-event-store.js';
 import type { ObjectiveRecord } from '../autonomy/objective-store.js';
+import type { TurnExecutionEvent } from './turn-execution-ledger.js';
 
 // ── Dashboard shared types ───────────────────────────────────────────
 
@@ -192,9 +193,9 @@ export interface DashboardEventMap {
   'session:update': SessionUpdateEvent;
   'session:clear': SessionClearEvent;
 
-    'queue:enqueue': QueueEnqueueEvent;
-    'queue:dequeue': QueueDequeueEvent;
-    'queue:processing': QueueProcessingEvent;
+  'queue:enqueue': QueueEnqueueEvent;
+  'queue:dequeue': QueueDequeueEvent;
+  'queue:processing': QueueProcessingEvent;
 
   'job:queued': JobQueuedEvent;
   'job:origin': JobOriginEvent;
@@ -204,6 +205,7 @@ export interface DashboardEventMap {
   'job:log': JobLogEvent;
   'job:result': JobResultEvent;
   'job:end': JobEndEvent;
+  'turn:execution': TurnExecutionEvent;
 }
 
 export type DashboardEventType = keyof DashboardEventMap;

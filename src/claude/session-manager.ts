@@ -131,6 +131,18 @@ class SessionManager {
     return this.createSession(chatId, directory);
   }
 
+  seedWorkingDirectoryFromSession(sourceChatId: number, targetChatId: number): Session | undefined {
+    const source = this.sessions.get(sourceChatId);
+    if (!source) return undefined;
+    const seeded = this.setWorkingDirectory(targetChatId, source.workingDirectory);
+    this.log('seed-project-only', {
+      scope: 'user+channel',
+      sourceChatId,
+      targetChatId,
+    });
+    return seeded;
+  }
+
   clearSession(chatId: number): void {
     this.sessions.delete(chatId);
     this.log('clear', { chatId });

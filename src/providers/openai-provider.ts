@@ -53,6 +53,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 };
 
 const DEFAULT_CONTEXT_WINDOW = 400_000;
+const DEFAULT_COMPACTION_EXCERPT_LENGTH = 240;
 
 type OpenAIStreamLogMode = 'off' | 'clean' | 'verbose';
 
@@ -129,10 +130,15 @@ export class OpenAIProvider implements AgentProvider {
   private readonly chatModels = new Map<number, string>();
   private readonly chatUsageCache = new Map<number, AgentUsage>();
   private readonly toolCallbackRefs = new Map<number, ToolCallbackRef>();
+  private readonly compactionExcerptLength: number;
 
   private authMode: 'api-key' | 'oauth' = 'api-key';
 
-  constructor() {
+  constructor(options: { compactionExcerptLength?: number } = {}) {
+    const configuredExcerptLength = options.compactionExcerptLength;
+    this.compactionExcerptLength = Number.isFinite(configuredExcerptLength) && (configuredExcerptLength ?? 0) > 0
+      ? Math.floor(configuredExcerptLength as number)
+      : DEFAULT_COMPACTION_EXCERPT_LENGTH;
     if (config.OPENAI_API_KEY) {
       this.authMode = 'api-key';
       console.log(`[OpenAI] Auth: API key, default model: ${config.OPENAI_DEFAULT_MODEL}`);
@@ -298,20 +304,28 @@ export class OpenAIProvider implements AgentProvider {
 
     let fullText = '';
     let resultUsage: AgentUsage | undefined;
+    let compaction: AgentResponse['compaction'] | undefined;
+    let historyForRequest = agentState.history;
 
     try {
       // Register lifecycle hooks (idempotent — only attaches once per Agent)
       this.ensureToolHooks(agentState.agent);
 
+      const compacted = this.maybeCompactHistory(agentState.history, contextWindow);
+      if (compacted) {
+        compaction = compacted.compaction;
+        historyForRequest = compacted.history;
+      }
+
       // Build input: accumulated history + new user message
       const input = Array.isArray(message)
-        ? this.buildInputWithItems(agentState.history, message)
-        : this.buildInput(agentState.history, prompt);
+        ? this.buildInputWithItems(historyForRequest, message)
+        : this.buildInput(historyForRequest, prompt);
 
       // Run with streaming — no session, local history only
       console.log(`[OpenAI] Starting run() with ${input.length} input items`);
-      const result = await runWithToolContext({ chatId, jobId: options.jobId, origin: options.jobOrigin }, async () =>
-        run(agentState.agent, input, {
+        const result = await runWithToolContext({ chatId, jobId: options.jobId, origin: options.jobOrigin, signal: controller.signal }, async () =>
+          run(agentState.agent, input, {
           stream: true,
           signal: controller.signal,
           // Avoid "Max turns (10) exceeded" from @openai/agents runner.
@@ -373,6 +387,9 @@ export class OpenAIProvider implements AgentProvider {
       }
 
       // Update local conversation history
+      if (historyForRequest !== agentState.history) {
+        agentState.history.splice(0, agentState.history.length, ...historyForRequest);
+      }
       if (!Array.isArray(message)) {
         agentState.history.push({ role: 'user', content: prompt });
       }
@@ -456,6 +473,39 @@ export class OpenAIProvider implements AgentProvider {
         });
       }
 
+      const overflowRetryAlreadyTried = Boolean(options._contextOverflowRetryTried);
+      const isContextOverflow = /context window|context_length_exceeded|maximum context length|input exceeds/i.test(errorMessage);
+      if (isContextOverflow && !overflowRetryAlreadyTried) {
+        const compactedHistory = this.buildCompactedHistory(agentState.history, contextWindow, true);
+        if (compactedHistory) {
+          console.warn(`[OpenAI] Context overflow detected. Retrying once after compaction (${compactedHistory.compaction.preTokens} tokens).`);
+          emitProviderEvent('context_overflow_retry', {
+            errorMessage,
+            effectiveModel,
+            compactedPreTokens: compactedHistory.compaction.preTokens,
+          });
+          eventBus.emit('agent:error', {
+            chatId,
+            error: `${errorMessage} (retrying after compaction)`,
+            timestamp: Date.now(),
+          });
+
+          const previousHistory = agentState.history;
+          agentState.history = compactedHistory.history;
+          try {
+            const retry = await this.send(chatId, message, {
+              ...options,
+              _contextOverflowRetryTried: true,
+            });
+            if (!retry.compaction) retry.compaction = compactedHistory.compaction;
+            return retry;
+          } catch (retryError) {
+            agentState.history = previousHistory;
+            throw retryError;
+          }
+        }
+      }
+
       emitProviderEvent('send_error', {
         errorMessage,
         requestedModel: requestedModelNorm ?? null,
@@ -500,6 +550,70 @@ export class OpenAIProvider implements AgentProvider {
       text: stripReasoningSummary(fullText) || 'No response from OpenAI.',
       toolsUsed,
       usage: resultUsage,
+      compaction,
+    };
+  }
+
+  private estimateTokensFromText(text: string): number {
+    // Coarse heuristic: roughly 4 characters per token for typical English prose.
+    // This favors simplicity over precision, so code-heavy or non-ASCII content
+    // may compact slightly earlier or later than ideal.
+    return Math.ceil(text.length / 4);
+  }
+
+  private estimateHistoryTokens(history: HistoryItem[]): number {
+    return history.reduce((sum, item) => sum + this.estimateTokensFromText(item.content), 0);
+  }
+
+  private maybeCompactHistory(
+    history: HistoryItem[],
+    contextWindow: number,
+  ): { history: HistoryItem[]; compaction: NonNullable<AgentResponse['compaction']> } | undefined {
+    return this.buildCompactedHistory(history, contextWindow, false);
+  }
+
+  private buildCompactedHistory(
+    history: HistoryItem[],
+    contextWindow: number,
+    force: boolean,
+  ): { history: HistoryItem[]; compaction: NonNullable<AgentResponse['compaction']> } | undefined {
+    if (history.length < 4) return undefined;
+
+    const estimated = this.estimateHistoryTokens(history);
+    const threshold = Math.floor(contextWindow * (force ? 0.35 : 0.6));
+    if (!force && estimated < threshold) return undefined;
+    if (force && estimated <= threshold && history.length <= 8) return undefined;
+
+    const keepCount = Math.min(6, history.length);
+    const splitIndex = Math.max(2, history.length - keepCount);
+    const older = history.slice(0, splitIndex);
+    const newer = history.slice(splitIndex);
+    if (older.length < 2) return undefined;
+
+      const summarized = older
+        .map((item, index) => {
+          const cleaned = item.content.replace(/\s+/g, ' ').trim();
+          const excerpt = cleaned.length > this.compactionExcerptLength
+            ? `${cleaned.slice(0, this.compactionExcerptLength)}…`
+            : cleaned;
+          return `${index + 1}. ${item.role}: ${excerpt || '(empty)'}`;
+        })
+        .join('\n');
+
+    const summary: HistoryItem = {
+      role: 'assistant',
+      content: [
+        'SYSTEM NOTE: Conversation summary for continued context:',
+        '- Older turns were compacted to stay within the model context window.',
+        '- Preserve decisions, requests, and unresolved tasks from the notes below.',
+        '',
+        summarized,
+      ].join('\n'),
+    };
+
+    return {
+      history: [summary, ...newer],
+      compaction: { trigger: 'auto', preTokens: estimated },
     };
   }
 

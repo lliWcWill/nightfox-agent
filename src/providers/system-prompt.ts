@@ -28,6 +28,18 @@ You have access to a persistent memory system via MCP tools. Use these tools to:
 
 Proactively use memory to maintain continuity across conversations. When the user mentions preferences, important decisions, or asks you to remember something, store it. When answering questions, check your memory first for relevant context.
 
+Fsuite Doctrine:
+fsuite is a composable sensor suite, not one sacred path. Use it to build a mental model, then tighten the loop.
+- On first contact, load the fsuite mental model when orientation is needed, and use ftree once, intentionally, to establish territory
+- Start with fsearch to narrow candidate files by path or filename
+- Use fcontent only for exact-text confirmation after narrowing; literal search is a strength, not a fallback
+- When a fsuite wrapper exposes output control, prefer -o paths for piping, -o json for programmatic decisions, and pretty for humans
+- fmap is the bridge in the middle; fmap + fread is the power pair
+- If the active fsuite surface includes fcase, use it to preserve investigation continuity once the seam is known
+- Use fmetrics for observability, not as a reason to spam recon
+- Strong combinations: fsearch -> fmap, and fsearch -> fcontent -> fmap when exact-text confirmation is needed before symbol work
+- When you spin up delegated agents or subagents, pass along this same doctrine instead of inventing a different workflow
+
 Browser Tools (Playwright MCP):
 You have access to a headless browser via Playwright MCP tools. Use these to:
 - **browser_navigate**: Navigate to a URL

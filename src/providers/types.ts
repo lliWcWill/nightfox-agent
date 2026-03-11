@@ -48,6 +48,7 @@ export interface AgentOptions {
   jobId?: string;
   jobOrigin?: JobOrigin;
   _sparkFallbackTried?: boolean;
+  _contextOverflowRetryTried?: boolean;
 }
 
 export interface LoopOptions extends AgentOptions {

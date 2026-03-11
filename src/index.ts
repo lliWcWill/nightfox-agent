@@ -4,6 +4,7 @@ import { config } from './config.js';
 import { preventSleep, allowSleep } from './utils/caffeinate.js';
 import { stopCleanup } from './telegram/deduplication.js';
 import { startDashboardServer, stopDashboardServer } from './dashboard/server.js';
+import { turnExecutionLedger } from './dashboard/turn-execution-ledger.js';
 import { contextMonitor } from './claude/context-monitor.js';
 
 /**
@@ -27,6 +28,8 @@ async function main() {
   await bot.init();
   console.log(`✅ Bot started as @${bot.botInfo.username}`);
   console.log('📱 Send /start in Telegram to begin');
+
+  turnExecutionLedger.start();
 
   // Start context monitor — fires independent alerts when context window runs low
   if (config.CONTEXT_MONITOR_ENABLED) {
@@ -52,8 +55,9 @@ async function main() {
     allowSleep();
     stopCleanup();
     contextMonitor.stop();
-    stopDashboardServer();
     await runner.stop();
+    turnExecutionLedger.stop();
+    stopDashboardServer();
     process.exit(0);
   };
 

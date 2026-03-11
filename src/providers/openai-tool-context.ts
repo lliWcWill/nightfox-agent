@@ -5,6 +5,7 @@ type ToolContext = {
   chatId: number;
   jobId?: string;
   origin?: JobOrigin;
+  signal?: AbortSignal;
 };
 
 const toolContextStore = new AsyncLocalStorage<ToolContext>();
@@ -23,4 +24,8 @@ export function getCurrentToolJobId(): string | undefined {
 
 export function getCurrentToolOrigin(): JobOrigin | undefined {
   return toolContextStore.getStore()?.origin;
+}
+
+export function getCurrentToolSignal(): AbortSignal | undefined {
+  return toolContextStore.getStore()?.signal;
 }

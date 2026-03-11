@@ -1,5 +1,6 @@
 import { EmbedBuilder } from 'discord.js';
 import { config } from '../config.js';
+import { getActiveContextTokens, getContextUsagePercent } from '../providers/usage-math.js';
 
 /** A channel that supports sending messages. */
 type SendableChannel = { send: (...args: any[]) => Promise<any> };
@@ -46,6 +47,32 @@ export async function sendCompactionNotice(
     await channel.send({ embeds: [embed] });
   } catch (err) {
     console.error('[Discord] Failed to send compaction notice:', err);
+  }
+}
+
+export async function sendUsageNotice(
+  channel: SendableChannel,
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; contextWindow: number; numTurns: number } | undefined,
+): Promise<void> {
+  if (!config.CONTEXT_SHOW_USAGE || !usage) return;
+
+  const activeTokens = getActiveContextTokens(usage);
+  const pct = getContextUsagePercent(usage);
+
+  const color = pct >= 80 ? 0xED4245 : pct >= 60 ? 0xFEE75C : 0x57F287;
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle('🧠 Context Status')
+    .setDescription(
+      `**${pct}% context used** · **${fmtTokens(activeTokens)} / ${fmtTokens(usage.contextWindow)}**\n`
+      + `Cache read: **${fmtTokens(usage.cacheReadTokens)}** · Turns: **${usage.numTurns}**`,
+    )
+    .setTimestamp();
+
+  try {
+    await channel.send({ embeds: [embed] });
+  } catch (err) {
+    console.error('[Discord] Failed to send usage notice:', err);
   }
 }
 

@@ -10,6 +10,7 @@ const ALL_EVENTS: DashboardEventType[] = [
   'session:create', 'session:update', 'session:clear',
   'queue:enqueue', 'queue:dequeue', 'queue:processing',
   'job:queued', 'job:origin', 'job:idempotency', 'job:start', 'job:progress', 'job:log', 'job:result', 'job:end',
+  'turn:execution',
 ];
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -47,9 +48,28 @@ let heartbeatTimer: NodeJS.Timeout | null = null;
  * @returns The created WebSocketServer instance.
  */
 export function attachWebSocket(server: Server): WebSocketServer {
-  wss = new WebSocketServer({ server, path: '/ws' });
+  if (wss) {
+    throw new Error('Dashboard WebSocket server is already attached');
+  }
+  const attachedWss = new WebSocketServer({ server, path: '/ws' });
+  wss = attachedWss;
+  const disposers: Array<() => void> = [];
+  let listenersCleanedUp = false;
 
-  wss.on('connection', (ws) => {
+  const cleanupEventListeners = () => {
+    if (listenersCleanedUp) return;
+    listenersCleanedUp = true;
+    for (const dispose of disposers) dispose();
+    if (wss === attachedWss) {
+      wss = null;
+    }
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  };
+
+  attachedWss.on('connection', (ws) => {
     console.log('[Dashboard WS] Client connected');
     clientState.set(ws, {
       isAlive: true,
@@ -101,7 +121,7 @@ export function attachWebSocket(server: Server): WebSocketServer {
   });
 
   for (const eventType of ALL_EVENTS) {
-    eventBus.on(eventType, (payload) => {
+    const listener = (payload: any) => {
       const message = {
         type: eventType,
         payload,
@@ -110,13 +130,16 @@ export function attachWebSocket(server: Server): WebSocketServer {
       } as WsMessage;
       appendReplay(message);
       broadcast(message);
-    });
+    };
+    eventBus.on(eventType, listener);
+    disposers.push(() => eventBus.off(eventType, listener));
   }
 
+  attachedWss.once('close', cleanupEventListeners);
   startHeartbeat();
 
   console.log('[Dashboard WS] WebSocket server attached');
-  return wss;
+  return attachedWss;
 }
 
 function startHeartbeat(): void {

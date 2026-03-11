@@ -5,12 +5,24 @@
  *   - Always: fsuite CLI tools (ftree, fsearch, fcontent, fmap, fread, fmetrics) + read_file
  *   - DANGEROUS_MODE only: custom function tools for shell/write/edit/patch
  *
- * Shell tool uses child_process.exec intentionally — tool input is a full shell
+ * fsuite doctrine:
+ *   - treat the available fsuite tools as a composable sensor suite, not one sacred path
+ *   - use ftree once, intentionally, to establish territory
+ *   - start with fsearch to narrow candidate files by path or filename
+ *   - use fcontent only for exact-text confirmation after narrowing
+ *   - when a wrapper exposes output control, prefer -o paths for piping, -o json for programmatic decisions, pretty for humans
+ *   - fmap is the bridge in the middle; fmap + fread is the power pair
+ *   - if fcase is available in the active fsuite surface, use it to preserve continuity once the seam is known
+ *   - fmetrics is observability, not a reason to spam recon
+ *   - literal search is a strength, not a fallback
+ *   - strong combinations: fsearch -> fmap, and fsearch -> fcontent -> fmap when exact-text confirmation is needed
+ *
+ * Shell tool uses child_process.exec intentionally - tool input is a full shell
  * command strings that may contain pipes, redirects, etc. This is gated behind
  * DANGEROUS_MODE=true, matching Claude provider's bypassPermissions behavior.
  */
 
-import { exec, execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -25,7 +37,7 @@ import { prepareAgentDeepLoopJob, prepareCodeRabbitReviewJob } from '../jobs/cor
 import { config } from '../config.js';
 import { delegatedSessionId } from '../discord/id-mapper.js';
 import { objectiveEventStore, objectiveStore } from '../autonomy/index.js';
-import { getCurrentToolChatId, getCurrentToolJobId, getCurrentToolOrigin } from './openai-tool-context.js';
+import { getCurrentToolChatId, getCurrentToolJobId, getCurrentToolOrigin, getCurrentToolSignal } from './openai-tool-context.js';
 
 import type { Tool } from '@openai/agents-core';
 
@@ -42,6 +54,11 @@ interface ShellCommandResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+}
+
+interface ManagedProcessResult extends ShellCommandResult {
+  timedOut: boolean;
+  aborted: boolean;
 }
 
 type PatchOperationResult = {
@@ -196,6 +213,167 @@ function truncateByBytes(str: string, maxBytes: number): string {
   return str.slice(0, lo) + '\n... [truncated]';
 }
 
+function sliceByBytes(str: string, maxBytes: number): string {
+  if (Buffer.byteLength(str, 'utf8') <= maxBytes) return str;
+  let lo = 0;
+  let hi = str.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >>> 1;
+    if (Buffer.byteLength(str.slice(0, mid), 'utf8') <= maxBytes) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return str.slice(0, lo);
+}
+
+function appendLimitedOutput(
+  current: string,
+  chunk: Buffer | string,
+  maxBytes: number,
+): { next: string; truncated: boolean } {
+  const chunkText = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+  const currentBytes = Buffer.byteLength(current, 'utf8');
+  if (currentBytes >= maxBytes) {
+    return { next: current, truncated: true };
+  }
+
+  const remaining = maxBytes - currentBytes;
+  if (Buffer.byteLength(chunkText, 'utf8') <= remaining) {
+    return { next: current + chunkText, truncated: false };
+  }
+
+  return {
+    next: current + sliceByBytes(chunkText, remaining),
+    truncated: true,
+  };
+}
+
+function finalizeOutput(text: string, truncated: boolean): string {
+  return truncated ? `${text}\n... [truncated]` : text;
+}
+
+function makeAbortError(): Error {
+  const error = new Error('Tool execution aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function signalProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void {
+  if (!pid) return;
+  try {
+    if (process.platform === 'win32') {
+      process.kill(pid, signal);
+      return;
+    }
+    process.kill(-pid, signal);
+  } catch {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // Ignore best-effort cleanup failures.
+    }
+  }
+}
+
+async function runManagedProcess(opts: {
+  command: string;
+  args: string[];
+  cwd: string;
+  timeoutMs: number;
+  maxOutputBytes: number;
+  signal?: AbortSignal;
+}): Promise<ManagedProcessResult> {
+  const { command, args, cwd, timeoutMs, maxOutputBytes, signal } = opts;
+  if (signal?.aborted) {
+    throw makeAbortError();
+  }
+
+  return await new Promise<ManagedProcessResult>((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+    let timedOut = false;
+    let aborted = false;
+    let settled = false;
+    let killTimer: NodeJS.Timeout | undefined;
+
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutHandle);
+      if (killTimer) clearTimeout(killTimer);
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+      fn();
+    };
+
+    const terminate = (reason: 'timeout' | 'abort') => {
+      if (reason === 'timeout') timedOut = true;
+      if (reason === 'abort') aborted = true;
+      signalProcessGroup(child.pid, 'SIGTERM');
+      killTimer = setTimeout(() => signalProcessGroup(child.pid, 'SIGKILL'), 250);
+      killTimer.unref();
+    };
+
+    child.stdout.on('data', (chunk) => {
+      const appended = appendLimitedOutput(stdout, chunk, maxOutputBytes);
+      stdout = appended.next;
+      stdoutTruncated ||= appended.truncated;
+    });
+
+    child.stderr.on('data', (chunk) => {
+      const appended = appendLimitedOutput(stderr, chunk, maxOutputBytes);
+      stderr = appended.next;
+      stderrTruncated ||= appended.truncated;
+    });
+
+    child.once('error', (error) => {
+      finish(() => reject(error));
+    });
+
+    child.once('close', (code) => {
+      finish(() => {
+        if (aborted) {
+          reject(makeAbortError());
+          return;
+        }
+        resolve({
+          stdout: finalizeOutput(stdout, stdoutTruncated),
+          stderr: finalizeOutput(stderr, stderrTruncated),
+          exitCode: typeof code === 'number' ? code : 1,
+          timedOut,
+          aborted,
+        });
+      });
+    });
+
+    const timeoutHandle = setTimeout(() => terminate('timeout'), timeoutMs);
+    timeoutHandle.unref();
+
+    const onAbort = signal
+      ? () => {
+          terminate('abort');
+        }
+      : undefined;
+
+    if (signal && onAbort) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 //  CLI runner (fsuite tools)
 // ---------------------------------------------------------------------------
@@ -210,21 +388,31 @@ function runCli(
   args: string[],
   cwd: string,
 ): Promise<string> {
-  return new Promise((resolve) => {
-    execFile(
-      resolveBin(cmd),
-      args,
-      { cwd, timeout: TOOL_TIMEOUT_MS, maxBuffer: MAX_OUTPUT_BYTES * 2 },
-      (error, stdout, stderr) => {
-        if (error) {
-          const msg = stderr?.trim() || error.message;
-          resolve(`[error] ${cmd} failed: ${msg}`);
-          return;
-        }
-        resolve(truncateByBytes(stdout, MAX_OUTPUT_BYTES));
-      },
-    );
-  });
+  return (async () => {
+    try {
+      const result = await runManagedProcess({
+        command: resolveBin(cmd),
+        args,
+        cwd,
+        timeoutMs: TOOL_TIMEOUT_MS,
+        maxOutputBytes: MAX_OUTPUT_BYTES,
+        signal: getCurrentToolSignal(),
+      });
+      if (result.exitCode !== 0) {
+        const reason = result.timedOut
+          ? `${cmd} timed out after ${TOOL_TIMEOUT_MS}ms`
+          : result.stderr.trim() || `exit code ${result.exitCode}`;
+        return `[error] ${cmd} failed: ${reason}`;
+      }
+      return truncateByBytes(result.stdout, MAX_OUTPUT_BYTES);
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      return `[error] ${cmd} failed: ${message}`;
+    }
+  })();
 }
 
 // ---------------------------------------------------------------------------
@@ -260,22 +448,21 @@ class LocalShell {
     timeout: number,
     maxOutput: number,
   ): Promise<ShellCommandResult> {
-    return new Promise((resolve) => {
-      exec(
-        command,
-        { cwd: this.cwd, timeout, maxBuffer: maxOutput * 2 },
-        (error, stdout, stderr) => {
-          const exitCode = error
-            ? ('code' in error && typeof error.code === 'number' ? error.code : 1)
-            : 0;
-          resolve({
-            stdout: truncateByBytes(String(stdout), maxOutput),
-            stderr: truncateByBytes(String(stderr), maxOutput),
-            exitCode,
-          });
-        },
-      );
-    });
+    return (async () => {
+      const result = await runManagedProcess({
+        command: 'bash',
+        args: ['-lc', command],
+        cwd: this.cwd,
+        timeoutMs: timeout,
+        maxOutputBytes: maxOutput,
+        signal: getCurrentToolSignal(),
+      });
+      return {
+        stdout: truncateByBytes(result.stdout, maxOutput),
+        stderr: truncateByBytes(result.stderr, maxOutput),
+        exitCode: result.exitCode,
+      };
+    })();
   }
 }
 
@@ -727,7 +914,9 @@ function createDelegateDeepTaskTool() {
   return tool({
     name: 'delegate_deep_task',
     description:
-      'Delegate a deep task to the autonomous background loop. Returns immediately with a jobId.',
+      'Delegate a deep task to the autonomous background loop. Returns immediately with a jobId. ' +
+      'Delegated agents inherit the same fsuite doctrine in compressed form: ftree once when orientation is needed, ' +
+      'start with fsearch, use fcontent only to confirm exact text, then let fmap + fread carry the seam.',
     parameters: z.object({
       task: z.string().describe('Deep task objective to execute in the loop'),
       model: z.string().nullable().optional().describe('Optional model override for the deep loop'),
@@ -958,7 +1147,9 @@ function createDelegateCodexHighReviewTool() {
   return tool({
     name: 'delegate_codex_high_review',
     description:
-      'Queue a strict deep review loop using primary model (gpt-5.4) for feature/code review tasks.',
+      'Queue a strict deep review loop using primary model (gpt-5.4) for feature/code review tasks. ' +
+      'Subagents should keep the same fsuite doctrine: orient once, narrow with fsearch, confirm with fcontent, ' +
+      'then use fmap + fread for the deep read.',
     parameters: z.object({
       task: z.string().describe('What should be reviewed or validated'),
       max_iterations: z.number().nullable().optional().describe('Optional max loop iterations (default 24)'),
@@ -1085,8 +1276,9 @@ function createFsuiteOnlyTools(cwd: string) {
     tool({
       name: 'ftree',
       description:
-        'Show a tree view of the project directory structure. ' +
-        'Flags: -L <n> (depth, default 3), -o pretty|paths|json (output format), ' +
+        'Intentional territory scan for first contact. Use ftree once, when appropriate, to establish the project shape, ' +
+        'then switch to narrower fsuite sensors instead of repeating broad recon. ' +
+        'Flags: -L <n> (depth, default 3), -o pretty|paths|json (prefer pretty for humans, paths for piping, json for programmatic decisions), ' +
         '-d (dirs only), -s (show sizes), -r/--recon (per-dir item counts + sizes), ' +
         '--snapshot (combined recon + tree), -I <pattern> (extra ignores), ' +
         '--include <name> (un-ignore a dir), --hide-excluded (suppress excluded summaries). ' +
@@ -1106,17 +1298,20 @@ function createFsuiteOnlyTools(cwd: string) {
     tool({
       name: 'fsearch',
       description:
-        'Fast filename and path search using glob patterns and extensions (NOT content search). ' +
+        'Primary narrowing tool for filenames and paths using glob patterns and extensions, not content search. ' +
+        'Start here to cut the candidate set before content confirmation or deep reads. ' +
+        'Literal path/filename search is a strength, not a fallback. ' +
         "Usage: fsearch <pattern_or_ext> [path]. " +
         "Pattern examples: 'upscale*' (starts-with), '*progress*' (contains), " +
         "'.log' or 'log' (extension search), '*error' (ends-with). " +
-        'Flags: -m <n> (max results), -o pretty|paths|json (output format), -b auto|find|fd (backend).',
+        'Flags: -m <n> (max results), -o pretty|paths|json (prefer paths for piping, json for programmatic decisions, pretty for humans), -b auto|find|fd (backend). ' +
+        'Strong combination: fsearch -> fmap.',
       parameters: z.object({
         query: z.string().describe("Glob pattern or file extension to search for, e.g. '*.ts', 'config*', '.log'"),
         args: z
           .string()
           .nullable()
-          .describe('Additional CLI arguments, e.g. "--output json --max 20 src/"'),
+          .describe('Additional CLI arguments, e.g. "-o json -m 20 src/"'),
       }),
       execute: async (input) => {
         const args = [input.query];
@@ -1125,16 +1320,19 @@ function createFsuiteOnlyTools(cwd: string) {
       },
     }),
 
-    tool({
-      name: 'fcontent',
-      description:
-        'Search file contents for matching text (grep-like). ' +
-        'The query argument is a search term, NOT a file path. ' +
-        'Returns matching lines with context. ' +
-        'Usage: fcontent <query> — searches for the query text across files in the working directory.',
-      parameters: z.object({
-        query: z.string().describe('Text pattern to search for in file contents'),
-      }),
+      tool({
+        name: 'fcontent',
+        description:
+          'Search file contents for matching text (grep-like). ' +
+          'Use it after fsearch has already narrowed the field, for exact-text confirmation rather than broad discovery. ' +
+          'Literal search is a strength here, not a fallback. ' +
+          'The query argument is a search term, NOT a file path. ' +
+          'Returns matching lines with context. ' +
+          'Usage: fcontent <query> - searches for the query text across files in the working directory. ' +
+          'In the wider fsuite doctrine, use fcontent only after narrowing and treat it as exact-text confirmation before deeper symbol work.',
+        parameters: z.object({
+          query: z.string().describe('Text pattern to search for in file contents'),
+        }),
       execute: async (input) => {
         return runCli('fcontent', [input.query], cwd);
       },
@@ -1143,10 +1341,11 @@ function createFsuiteOnlyTools(cwd: string) {
       tool({
         name: 'fmap',
         description:
-          'Code cartography — extract symbols (functions, classes, types, imports) from source files. ' +
+          'Code cartography - fmap is the bridge in the middle, turning narrowed files into symbol-level territory. ' +
+          'Use it after fsearch or fcontent, then pair it with fread for the deep read. ' +
         'Supports 12 languages (Python, JS, TS, Rust, Go, Java, C, C++, Ruby, Lua, PHP, Bash). ' +
         'Modes: fmap <dir> (scan all files), fmap <file> (single file), piped: fsearch -o paths "*.py" | fmap. ' +
-        'Flags: -o pretty|paths|json, -t <type> (function|class|import|type|export|constant), ' +
+        'Flags: -o pretty|paths|json (prefer paths for piping, json for programmatic decisions, pretty for humans), -t <type> (function|class|import|type|export|constant), ' +
         '-L <lang> (force language), -m <n> (max symbols), -n <n> (max files), --no-imports.',
       parameters: z.object({
         args: z
@@ -1164,7 +1363,7 @@ function createFsuiteOnlyTools(cwd: string) {
         name: 'fread',
         description:
           'Budgeted file reading with line numbers, token estimates, and pipeline integration. ' +
-          'Use this as the primary file-reading tool after ftree/fsearch/fcontent/fmap identify the target. ' +
+          'Use this after ftree/fsearch/fcontent/fmap identify the target; fmap + fread is the power pair once the seam is known. ' +
           'Examples: "--head 80 path/to/file", "-r 120:220 path/to/file", "--around-line 150 -B 8 -A 20 path/to/file", ' +
           '"--around pattern -B 5 -A 10 path/to/file". Supports --from-stdin with paths or unified-diff.',
         parameters: z.object({
@@ -1182,9 +1381,10 @@ function createFsuiteOnlyTools(cwd: string) {
         name: 'fmetrics',
       description:
         'Performance telemetry and analytics for fsuite tools. ' +
+        'This is observability, not a reason to spam recon or repeat discovery you already finished. ' +
         'Subcommands: stats (usage dashboard), history (recent runs), predict <path> (estimate runtimes), ' +
         'profile (machine info), import (ingest telemetry), clean (prune old data). ' +
-        'Flags: -o pretty|json. History: --tool <name>, --project <name>, --limit <n>. ' +
+        'Flags: -o pretty|json (prefer json for programmatic decisions, pretty for humans). History: --tool <name>, --project <name>, --limit <n>. ' +
         'Predict: --tool <name>. Clean: --days <n>, --dry-run.',
       parameters: z.object({
         args: z

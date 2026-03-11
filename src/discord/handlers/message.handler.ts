@@ -27,7 +27,7 @@ import { downloadFileSecure } from '../../utils/download.js';
 import { isValidImageFile, getFileType } from '../../utils/file-type.js';
 import { handleVoiceMessage } from './voice.handler.js';
 import { maybeSendDiscordVoiceReply } from '../voice-reply.js';
-import { sendCompactionNotice, sendSessionInitNotice } from '../compaction-notice.js';
+import { sendCompactionNotice, sendSessionInitNotice, sendUsageNotice } from '../compaction-notice.js';
 import { transcribeFile } from '../../audio/transcribe.js';
 import { markConversationActivity } from '../jobs/activity-gate.js';
 import * as os from 'os';
@@ -296,6 +296,7 @@ async function handleImageAttachment(
           await message.reply({ content: 'Image actions:', components: [row] });
         } catch { /* ignore */ }
         if ('send' in message.channel) {
+          await sendUsageNotice(message.channel, response.usage);
           await sendCompactionNotice(message.channel, response.compaction);
           await sendSessionInitNotice(message.channel, response.sessionInit, previousSessionId);
         }
@@ -461,6 +462,7 @@ export async function handleMessage(message: Message): Promise<void> {
 
         // Context visibility notifications
         if ('send' in message.channel) {
+          await sendUsageNotice(message.channel, response.usage);
           await sendCompactionNotice(message.channel, response.compaction);
           await sendSessionInitNotice(message.channel, response.sessionInit, previousSessionId);
         }
