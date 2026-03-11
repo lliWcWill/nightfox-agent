@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 import { eventBus } from './event-bus.js';
 import { TurnExecutionLedger } from './turn-execution-ledger.js';
@@ -37,5 +39,30 @@ test('turn ledger records reply-only turns from runtime events', () => {
     assert.equal(latest.delegatedJobIds.length, 0);
   } finally {
     ledger.stop();
+  }
+});
+
+test('turn ledger warns and clears cached state on invalid persisted JSON', () => {
+  const repoRoot = path.join(process.cwd(), '.tmp-turn-ledger-invalid');
+  const persistDir = path.join(repoRoot, '.nightfox', 'dashboard');
+  const persistPath = path.join(persistDir, 'turn-execution.json');
+  fs.mkdirSync(persistDir, { recursive: true });
+  fs.writeFileSync(persistPath, '{invalid json');
+
+  const warnings: unknown[][] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+
+  try {
+    const ledger = new TurnExecutionLedger(repoRoot);
+    assert.equal(ledger.getLatest(9999), undefined);
+    assert.equal(warnings.length, 1);
+    assert.match(String(warnings[0][0]), /Failed to load persisted state/);
+    assert.match(String(warnings[0][0]), /turn-execution\.json/);
+  } finally {
+    console.warn = originalWarn;
+    fs.rmSync(repoRoot, { recursive: true, force: true });
   }
 });

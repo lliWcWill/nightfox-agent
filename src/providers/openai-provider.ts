@@ -299,17 +299,22 @@ export class OpenAIProvider implements AgentProvider {
     let fullText = '';
     let resultUsage: AgentUsage | undefined;
     let compaction: AgentResponse['compaction'] | undefined;
+    let historyForRequest = agentState.history;
 
     try {
       // Register lifecycle hooks (idempotent — only attaches once per Agent)
       this.ensureToolHooks(agentState.agent);
 
-      compaction = this.maybeCompactHistory(agentState.history, contextWindow);
+      const compacted = this.maybeCompactHistory(agentState.history, contextWindow);
+      if (compacted) {
+        compaction = compacted.compaction;
+        historyForRequest = compacted.history;
+      }
 
       // Build input: accumulated history + new user message
       const input = Array.isArray(message)
-        ? this.buildInputWithItems(agentState.history, message)
-        : this.buildInput(agentState.history, prompt);
+        ? this.buildInputWithItems(historyForRequest, message)
+        : this.buildInput(historyForRequest, prompt);
 
       // Run with streaming — no session, local history only
       console.log(`[OpenAI] Starting run() with ${input.length} input items`);
@@ -376,6 +381,9 @@ export class OpenAIProvider implements AgentProvider {
       }
 
       // Update local conversation history
+      if (historyForRequest !== agentState.history) {
+        agentState.history.splice(0, agentState.history.length, ...historyForRequest);
+      }
       if (!Array.isArray(message)) {
         agentState.history.push({ role: 'user', content: prompt });
       }
@@ -541,6 +549,9 @@ export class OpenAIProvider implements AgentProvider {
   }
 
   private estimateTokensFromText(text: string): number {
+    // Coarse heuristic: roughly 4 characters per token for typical English prose.
+    // This favors simplicity over precision, so code-heavy or non-ASCII content
+    // may compact slightly earlier or later than ideal.
     return Math.ceil(text.length / 4);
   }
 
@@ -548,11 +559,11 @@ export class OpenAIProvider implements AgentProvider {
     return history.reduce((sum, item) => sum + this.estimateTokensFromText(item.content), 0);
   }
 
-  private maybeCompactHistory(history: HistoryItem[], contextWindow: number): AgentResponse['compaction'] | undefined {
-    const compacted = this.buildCompactedHistory(history, contextWindow, false);
-    if (!compacted) return undefined;
-    history.splice(0, history.length, ...compacted.history);
-    return compacted.compaction;
+  private maybeCompactHistory(
+    history: HistoryItem[],
+    contextWindow: number,
+  ): { history: HistoryItem[]; compaction: NonNullable<AgentResponse['compaction']> } | undefined {
+    return this.buildCompactedHistory(history, contextWindow, false);
   }
 
   private buildCompactedHistory(
@@ -584,7 +595,7 @@ export class OpenAIProvider implements AgentProvider {
     const summary: HistoryItem = {
       role: 'assistant',
       content: [
-        'Conversation summary for continued context:',
+        'SYSTEM NOTE: Conversation summary for continued context:',
         '- Older turns were compacted to stay within the model context window.',
         '- Preserve decisions, requests, and unresolved tasks from the notes below.',
         '',

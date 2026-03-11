@@ -72,7 +72,7 @@ export class TurnExecutionLedger {
     const turn = this.ensureActiveTurn(ev.chatId, ev.timestamp);
     const target = [...turn.toolCalls].reverse().find((call) => {
       if (ev.callId && call.callId) return call.callId === ev.callId;
-      return !call.endedAt && call.toolName === ev.toolName;
+      return !call.endedAt && call.toolName === ev.toolName && Math.abs(ev.timestamp - call.startedAt) <= 60_000;
     });
     if (target) {
       target.endedAt = ev.timestamp;
@@ -193,7 +193,8 @@ export class TurnExecutionLedger {
         const id = Number(chatId);
         if (Number.isFinite(id) && record) this.latestByChat.set(id, record);
       }
-    } catch {
+    } catch (error) {
+      console.warn(`[TurnExecutionLedger] Failed to load persisted state from ${this.persistPath}; clearing cached records.`, error);
       this.latestByChat.clear();
     }
   }
@@ -206,7 +207,7 @@ export class TurnExecutionLedger {
   }
 
   private clone(record: TurnExecutionRecord): TurnExecutionRecord {
-    return JSON.parse(JSON.stringify(record)) as TurnExecutionRecord;
+    return structuredClone(record);
   }
 }
 
