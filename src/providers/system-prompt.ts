@@ -30,7 +30,7 @@ Proactively use memory to maintain continuity across conversations. When the use
 
 Fsuite Doctrine:
 fsuite is a composable sensor suite, not one sacred path. Use it to build a mental model, then tighten the loop.
-- On first contact, run fsuite once when orientation is needed, and use ftree once, intentionally, to establish territory
+- On first contact, load the fsuite mental model when orientation is needed, and use ftree once, intentionally, to establish territory
 - Start with fsearch to narrow candidate files by path or filename
 - Use fcontent only for exact-text confirmation after narrowing; literal search is a strength, not a fallback
 - Prefer -o paths for piping, -o json for programmatic decisions, and pretty for humans

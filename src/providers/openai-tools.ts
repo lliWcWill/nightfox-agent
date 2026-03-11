@@ -1148,14 +1148,14 @@ function createFsuiteOnlyTools(cwd: string) {
 
     tool({
       name: 'fcontent',
-      description:
-        'Search file contents for matching text (grep-like). ' +
-        'Use it after fsearch has already narrowed the field, for exact-text confirmation rather than broad discovery. ' +
-        'Literal search is a strength here, not a fallback. ' +
-        'The query argument is a search term, NOT a file path. ' +
-        'Returns matching lines with context. ' +
-        'Usage: fcontent <query> - searches for the query text across files in the working directory. ' +
-        'In raw fsuite flows, the strong handoff is fcontent -o paths -> fmap.',
+        description:
+          'Search file contents for matching text (grep-like). ' +
+          'Use it after fsearch has already narrowed the field, for exact-text confirmation rather than broad discovery. ' +
+          'Literal search is a strength here, not a fallback. ' +
+          'The query argument is a search term, NOT a file path. ' +
+          'Returns matching lines with context. ' +
+          'Usage: fcontent <query> - searches for the query text across files in the working directory. ' +
+          'In the wider fsuite doctrine, use fcontent only after narrowing and treat it as exact-text confirmation before deeper symbol work.',
       parameters: z.object({
         query: z.string().describe('Text pattern to search for in file contents'),
       }),
