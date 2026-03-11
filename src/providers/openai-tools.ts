@@ -22,7 +22,7 @@
  * DANGEROUS_MODE=true, matching Claude provider's bypassPermissions behavior.
  */
 
-import { exec, execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -37,7 +37,7 @@ import { prepareAgentDeepLoopJob, prepareCodeRabbitReviewJob } from '../jobs/cor
 import { config } from '../config.js';
 import { delegatedSessionId } from '../discord/id-mapper.js';
 import { objectiveEventStore, objectiveStore } from '../autonomy/index.js';
-import { getCurrentToolChatId, getCurrentToolJobId, getCurrentToolOrigin } from './openai-tool-context.js';
+import { getCurrentToolChatId, getCurrentToolJobId, getCurrentToolOrigin, getCurrentToolSignal } from './openai-tool-context.js';
 
 import type { Tool } from '@openai/agents-core';
 
@@ -54,6 +54,11 @@ interface ShellCommandResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+}
+
+interface ManagedProcessResult extends ShellCommandResult {
+  timedOut: boolean;
+  aborted: boolean;
 }
 
 type PatchOperationResult = {
@@ -208,6 +213,167 @@ function truncateByBytes(str: string, maxBytes: number): string {
   return str.slice(0, lo) + '\n... [truncated]';
 }
 
+function sliceByBytes(str: string, maxBytes: number): string {
+  if (Buffer.byteLength(str, 'utf8') <= maxBytes) return str;
+  let lo = 0;
+  let hi = str.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >>> 1;
+    if (Buffer.byteLength(str.slice(0, mid), 'utf8') <= maxBytes) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return str.slice(0, lo);
+}
+
+function appendLimitedOutput(
+  current: string,
+  chunk: Buffer | string,
+  maxBytes: number,
+): { next: string; truncated: boolean } {
+  const chunkText = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+  const currentBytes = Buffer.byteLength(current, 'utf8');
+  if (currentBytes >= maxBytes) {
+    return { next: current, truncated: true };
+  }
+
+  const remaining = maxBytes - currentBytes;
+  if (Buffer.byteLength(chunkText, 'utf8') <= remaining) {
+    return { next: current + chunkText, truncated: false };
+  }
+
+  return {
+    next: current + sliceByBytes(chunkText, remaining),
+    truncated: true,
+  };
+}
+
+function finalizeOutput(text: string, truncated: boolean): string {
+  return truncated ? `${text}\n... [truncated]` : text;
+}
+
+function makeAbortError(): Error {
+  const error = new Error('Tool execution aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function signalProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void {
+  if (!pid) return;
+  try {
+    if (process.platform === 'win32') {
+      process.kill(pid, signal);
+      return;
+    }
+    process.kill(-pid, signal);
+  } catch {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // Ignore best-effort cleanup failures.
+    }
+  }
+}
+
+async function runManagedProcess(opts: {
+  command: string;
+  args: string[];
+  cwd: string;
+  timeoutMs: number;
+  maxOutputBytes: number;
+  signal?: AbortSignal;
+}): Promise<ManagedProcessResult> {
+  const { command, args, cwd, timeoutMs, maxOutputBytes, signal } = opts;
+  if (signal?.aborted) {
+    throw makeAbortError();
+  }
+
+  return await new Promise<ManagedProcessResult>((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+    let timedOut = false;
+    let aborted = false;
+    let settled = false;
+    let killTimer: NodeJS.Timeout | undefined;
+
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutHandle);
+      if (killTimer) clearTimeout(killTimer);
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+      fn();
+    };
+
+    const terminate = (reason: 'timeout' | 'abort') => {
+      if (reason === 'timeout') timedOut = true;
+      if (reason === 'abort') aborted = true;
+      signalProcessGroup(child.pid, 'SIGTERM');
+      killTimer = setTimeout(() => signalProcessGroup(child.pid, 'SIGKILL'), 250);
+      killTimer.unref();
+    };
+
+    child.stdout.on('data', (chunk) => {
+      const appended = appendLimitedOutput(stdout, chunk, maxOutputBytes);
+      stdout = appended.next;
+      stdoutTruncated ||= appended.truncated;
+    });
+
+    child.stderr.on('data', (chunk) => {
+      const appended = appendLimitedOutput(stderr, chunk, maxOutputBytes);
+      stderr = appended.next;
+      stderrTruncated ||= appended.truncated;
+    });
+
+    child.once('error', (error) => {
+      finish(() => reject(error));
+    });
+
+    child.once('close', (code) => {
+      finish(() => {
+        if (aborted) {
+          reject(makeAbortError());
+          return;
+        }
+        resolve({
+          stdout: finalizeOutput(stdout, stdoutTruncated),
+          stderr: finalizeOutput(stderr, stderrTruncated),
+          exitCode: typeof code === 'number' ? code : 1,
+          timedOut,
+          aborted,
+        });
+      });
+    });
+
+    const timeoutHandle = setTimeout(() => terminate('timeout'), timeoutMs);
+    timeoutHandle.unref();
+
+    const onAbort = signal
+      ? () => {
+          terminate('abort');
+        }
+      : undefined;
+
+    if (signal && onAbort) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 //  CLI runner (fsuite tools)
 // ---------------------------------------------------------------------------
@@ -222,21 +388,31 @@ function runCli(
   args: string[],
   cwd: string,
 ): Promise<string> {
-  return new Promise((resolve) => {
-    execFile(
-      resolveBin(cmd),
-      args,
-      { cwd, timeout: TOOL_TIMEOUT_MS, maxBuffer: MAX_OUTPUT_BYTES * 2 },
-      (error, stdout, stderr) => {
-        if (error) {
-          const msg = stderr?.trim() || error.message;
-          resolve(`[error] ${cmd} failed: ${msg}`);
-          return;
-        }
-        resolve(truncateByBytes(stdout, MAX_OUTPUT_BYTES));
-      },
-    );
-  });
+  return (async () => {
+    try {
+      const result = await runManagedProcess({
+        command: resolveBin(cmd),
+        args,
+        cwd,
+        timeoutMs: TOOL_TIMEOUT_MS,
+        maxOutputBytes: MAX_OUTPUT_BYTES,
+        signal: getCurrentToolSignal(),
+      });
+      if (result.exitCode !== 0) {
+        const reason = result.timedOut
+          ? `${cmd} timed out after ${TOOL_TIMEOUT_MS}ms`
+          : result.stderr.trim() || `exit code ${result.exitCode}`;
+        return `[error] ${cmd} failed: ${reason}`;
+      }
+      return truncateByBytes(result.stdout, MAX_OUTPUT_BYTES);
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      return `[error] ${cmd} failed: ${message}`;
+    }
+  })();
 }
 
 // ---------------------------------------------------------------------------
@@ -272,22 +448,21 @@ class LocalShell {
     timeout: number,
     maxOutput: number,
   ): Promise<ShellCommandResult> {
-    return new Promise((resolve) => {
-      exec(
-        command,
-        { cwd: this.cwd, timeout, maxBuffer: maxOutput * 2 },
-        (error, stdout, stderr) => {
-          const exitCode = error
-            ? ('code' in error && typeof error.code === 'number' ? error.code : 1)
-            : 0;
-          resolve({
-            stdout: truncateByBytes(String(stdout), maxOutput),
-            stderr: truncateByBytes(String(stderr), maxOutput),
-            exitCode,
-          });
-        },
-      );
-    });
+    return (async () => {
+      const result = await runManagedProcess({
+        command: 'bash',
+        args: ['-lc', command],
+        cwd: this.cwd,
+        timeoutMs: timeout,
+        maxOutputBytes: maxOutput,
+        signal: getCurrentToolSignal(),
+      });
+      return {
+        stdout: truncateByBytes(result.stdout, maxOutput),
+        stderr: truncateByBytes(result.stderr, maxOutput),
+        exitCode: result.exitCode,
+      };
+    })();
   }
 }
 

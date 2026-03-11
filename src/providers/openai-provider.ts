@@ -318,8 +318,8 @@ export class OpenAIProvider implements AgentProvider {
 
       // Run with streaming — no session, local history only
       console.log(`[OpenAI] Starting run() with ${input.length} input items`);
-      const result = await runWithToolContext({ chatId, jobId: options.jobId, origin: options.jobOrigin }, async () =>
-        run(agentState.agent, input, {
+        const result = await runWithToolContext({ chatId, jobId: options.jobId, origin: options.jobOrigin, signal: controller.signal }, async () =>
+          run(agentState.agent, input, {
           stream: true,
           signal: controller.signal,
           // Avoid "Max turns (10) exceeded" from @openai/agents runner.
