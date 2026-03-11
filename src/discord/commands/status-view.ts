@@ -1,5 +1,7 @@
 import { getActiveContextTokens, getContextUsagePercent } from '../../providers/usage-math.js';
 
+const TOKEN_FORMATTER = new Intl.NumberFormat('en-US');
+
 export interface StatusUsage {
   inputTokens: number;
   outputTokens: number;
@@ -74,7 +76,7 @@ export function buildStatusMessage(input: BuildStatusMessageInput): string {
     if (input.usage) {
       const activeTokens = getActiveContextTokens(input.usage);
       const pct = getContextUsagePercent(input.usage);
-      lines.push(`\n**Context:** ${activeTokens.toLocaleString()} / ${input.usage.contextWindow.toLocaleString()} tokens (${pct}%)`);
+      lines.push(`\n**Context:** ${TOKEN_FORMATTER.format(activeTokens)} / ${TOKEN_FORMATTER.format(input.usage.contextWindow)} tokens (${pct}%)`);
       lines.push(`**Cost:** $${input.usage.totalCostUsd.toFixed(4)}`);
       lines.push(`**Turns:** ${input.usage.numTurns}`);
     }

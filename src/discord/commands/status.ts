@@ -30,7 +30,8 @@ export async function handleStatus(interaction: ChatInputCommandInteraction): Pr
   const queued = recentJobs.filter(j => j.state === 'queued').length;
   const lanes = Array.from(new Set(recentJobs.map((j) => j.lane))).join(', ');
 
-  const lastTurn = turnExecutionLedger.getLatest(scopedChatId);
+  const latestTurn = turnExecutionLedger.getLatest(scopedChatId);
+  const lastTurn = latestTurn?.completedAt ? latestTurn : undefined;
 
   const content = buildStatusMessage({
     projectPath: lane.effectiveProjectSession?.workingDirectory,

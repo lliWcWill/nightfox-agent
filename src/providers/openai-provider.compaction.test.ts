@@ -17,7 +17,7 @@ test('buildCompactedHistory returns a non-destructive compacted copy', () => {
   ];
   const originalSnapshot = structuredClone(history);
 
-  const result = (provider as any).buildCompactedHistory(history, 4000, true);
+  const result = (provider as any).buildCompactedHistory(history, 2000, true);
 
   assert.ok(result);
   assert.deepEqual(history, originalSnapshot);
@@ -59,6 +59,26 @@ test('buildCompactedHistory skips force compaction for short low-usage histories
     { role: 'assistant' as const, content: 'short 6' },
   ];
 
-  const result = (provider as any).buildCompactedHistory(history, 4000, true);
+  const result = (provider as any).buildCompactedHistory(history, 2000, true);
   assert.equal(result, undefined);
+});
+
+test('buildCompactedHistory honors the configured excerpt limit', () => {
+  const provider = new OpenAIProvider({ compactionExcerptLength: 80 });
+  const history = [
+    { role: 'user' as const, content: 'A'.repeat(400) },
+    { role: 'assistant' as const, content: 'B'.repeat(400) },
+    { role: 'user' as const, content: 'C'.repeat(400) },
+    { role: 'assistant' as const, content: 'D'.repeat(400) },
+    { role: 'user' as const, content: 'E'.repeat(400) },
+    { role: 'assistant' as const, content: 'F'.repeat(400) },
+    { role: 'user' as const, content: 'G'.repeat(400) },
+    { role: 'assistant' as const, content: 'H'.repeat(400) },
+  ];
+
+  const result = (provider as any).buildCompactedHistory(history, 2000, true);
+
+  assert.ok(result);
+  assert.match(result.history[0].content, new RegExp(`1\\. user: A{80}…`));
+  assert.doesNotMatch(result.history[0].content, new RegExp(`1\\. user: A{81}`));
 });

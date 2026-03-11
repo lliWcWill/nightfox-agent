@@ -42,14 +42,13 @@ export class TurnExecutionLedger {
 
   private readonly onAgentStart = (ev: DashboardEventMap['agent:start']) => {
     const prior = this.activeTurns.get(ev.chatId);
-    const waitingForUser = this.detectWaitingForUser(ev.prompt);
     const record: ActiveTurn = {
       chatId: ev.chatId,
       turnStartedAt: ev.timestamp,
-      disposition: waitingForUser ? 'waiting_on_user' : 'respond_only',
+      disposition: 'respond_only',
       toolCalls: [],
       delegatedJobIds: [],
-      waitingForUser,
+      waitingForUser: false,
     };
     this.activeTurns.set(ev.chatId, record);
     if (prior?.completedAt) {
@@ -85,6 +84,7 @@ export class TurnExecutionLedger {
     const turn = this.ensureActiveTurn(ev.chatId, ev.timestamp);
     turn.completedAt = ev.timestamp;
     turn.responseText = ev.text;
+    turn.waitingForUser = this.detectWaitingForUser(ev.text);
     turn.disposition = this.finalDisposition(turn);
     this.finalize(turn);
   };
@@ -203,7 +203,14 @@ export class TurnExecutionLedger {
     const latestByChat = Object.fromEntries(
       [...this.latestByChat.entries()].map(([chatId, record]) => [String(chatId), record]),
     );
-    fs.writeFileSync(this.persistPath, JSON.stringify({ latestByChat }, null, 2));
+    try {
+      fs.writeFileSync(this.persistPath, JSON.stringify({ latestByChat }, null, 2));
+    } catch (error) {
+      console.error(
+        `[TurnExecutionLedger] Failed to persist turn execution state to ${this.persistPath}. Continuing with in-memory state.`,
+        error,
+      );
+    }
   }
 
   private clone(record: TurnExecutionRecord): TurnExecutionRecord {

@@ -106,7 +106,6 @@ export async function handleContext(interaction: ChatInputCommandInteraction): P
 
   const cached = getCachedUsage(chatId);
   if (cached) {
-    const activeTokens = getActiveContextTokens(cached);
     const totalTokens = getTotalUsageTokens(cached);
     const pct = getContextUsagePercent(cached);
     const bar = getProgressBar(pct);

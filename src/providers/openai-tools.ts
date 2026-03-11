@@ -1320,8 +1320,8 @@ function createFsuiteOnlyTools(cwd: string) {
       },
     }),
 
-    tool({
-      name: 'fcontent',
+      tool({
+        name: 'fcontent',
         description:
           'Search file contents for matching text (grep-like). ' +
           'Use it after fsearch has already narrowed the field, for exact-text confirmation rather than broad discovery. ' +
@@ -1330,9 +1330,9 @@ function createFsuiteOnlyTools(cwd: string) {
           'Returns matching lines with context. ' +
           'Usage: fcontent <query> - searches for the query text across files in the working directory. ' +
           'In the wider fsuite doctrine, use fcontent only after narrowing and treat it as exact-text confirmation before deeper symbol work.',
-      parameters: z.object({
-        query: z.string().describe('Text pattern to search for in file contents'),
-      }),
+        parameters: z.object({
+          query: z.string().describe('Text pattern to search for in file contents'),
+        }),
       execute: async (input) => {
         return runCli('fcontent', [input.query], cwd);
       },

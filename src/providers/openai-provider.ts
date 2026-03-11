@@ -53,6 +53,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 };
 
 const DEFAULT_CONTEXT_WINDOW = 400_000;
+const DEFAULT_COMPACTION_EXCERPT_LENGTH = 240;
 
 type OpenAIStreamLogMode = 'off' | 'clean' | 'verbose';
 
@@ -129,10 +130,15 @@ export class OpenAIProvider implements AgentProvider {
   private readonly chatModels = new Map<number, string>();
   private readonly chatUsageCache = new Map<number, AgentUsage>();
   private readonly toolCallbackRefs = new Map<number, ToolCallbackRef>();
+  private readonly compactionExcerptLength: number;
 
   private authMode: 'api-key' | 'oauth' = 'api-key';
 
-  constructor() {
+  constructor(options: { compactionExcerptLength?: number } = {}) {
+    const configuredExcerptLength = options.compactionExcerptLength;
+    this.compactionExcerptLength = Number.isFinite(configuredExcerptLength) && (configuredExcerptLength ?? 0) > 0
+      ? Math.floor(configuredExcerptLength as number)
+      : DEFAULT_COMPACTION_EXCERPT_LENGTH;
     if (config.OPENAI_API_KEY) {
       this.authMode = 'api-key';
       console.log(`[OpenAI] Auth: API key, default model: ${config.OPENAI_DEFAULT_MODEL}`);
@@ -584,13 +590,15 @@ export class OpenAIProvider implements AgentProvider {
     const newer = history.slice(splitIndex);
     if (older.length < 2) return undefined;
 
-    const summarized = older
-      .map((item, index) => {
-        const cleaned = item.content.replace(/\s+/g, ' ').trim();
-        const excerpt = cleaned.length > 240 ? `${cleaned.slice(0, 240)}…` : cleaned;
-        return `${index + 1}. ${item.role}: ${excerpt || '(empty)'}`;
-      })
-      .join('\n');
+      const summarized = older
+        .map((item, index) => {
+          const cleaned = item.content.replace(/\s+/g, ' ').trim();
+          const excerpt = cleaned.length > this.compactionExcerptLength
+            ? `${cleaned.slice(0, this.compactionExcerptLength)}…`
+            : cleaned;
+          return `${index + 1}. ${item.role}: ${excerpt || '(empty)'}`;
+        })
+        .join('\n');
 
     const summary: HistoryItem = {
       role: 'assistant',

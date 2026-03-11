@@ -55,9 +55,9 @@ async function main() {
     allowSleep();
     stopCleanup();
     contextMonitor.stop();
+    await runner.stop();
     turnExecutionLedger.stop();
     stopDashboardServer();
-    await runner.stop();
     process.exit(0);
   };
 

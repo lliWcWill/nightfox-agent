@@ -4,8 +4,18 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+const originalHome = process.env.HOME;
 const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'nightfox-session-home-'));
 process.env.HOME = testHome;
+
+test.after(() => {
+  if (originalHome === undefined) {
+    delete process.env.HOME;
+  } else {
+    process.env.HOME = originalHome;
+  }
+  fs.rmSync(testHome, { recursive: true, force: true });
+});
 
 test('seedWorkingDirectoryFromSession copies only workingDirectory into target lane', async () => {
   const { sessionManager } = await import('./session-manager.js');

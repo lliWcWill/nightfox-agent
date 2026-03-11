@@ -66,3 +66,46 @@ test('buildStatusMessage shows explicit none source when no project is bound', a
   assert.match(content, /No active session\. Use `\/project <path>` to start\./);
   assert.match(content, /\*\*Project Source:\*\* none/);
 });
+
+test('buildStatusMessage formats token counts deterministically with en-US separators', async () => {
+  const { buildStatusMessage } = await import('./status-view.js');
+  const originalToLocaleString = Number.prototype.toLocaleString;
+
+  Number.prototype.toLocaleString = function patched(locale?: string | string[], ...args: any[]) {
+    if (locale === undefined) {
+      return 'locale-dependent-output';
+    }
+    return originalToLocaleString.call(this, locale as any, ...args);
+  };
+
+  try {
+    const content = buildStatusMessage({
+      projectPath: '/tmp/project',
+      projectSourceLabel: 'scoped',
+      provider: 'claude',
+      model: 'scoped-model',
+      processing: false,
+      dangerous: false,
+      recentJobs: {
+        running: 0,
+        queued: 0,
+        total: 0,
+        lanes: '',
+      },
+      scopedChatId: 12345,
+      legacyChatId: 67890,
+      usage: {
+        inputTokens: 1900,
+        outputTokens: 600,
+        contextWindow: 128000,
+        totalCostUsd: 0.1256,
+        numTurns: 7,
+      },
+    });
+
+    assert.match(content, /\*\*Context:\*\* 2,500 \/ 128,000 tokens \(2%\)/);
+    assert.doesNotMatch(content, /locale-dependent-output/);
+  } finally {
+    Number.prototype.toLocaleString = originalToLocaleString;
+  }
+});
