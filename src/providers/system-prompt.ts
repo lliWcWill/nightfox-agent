@@ -33,11 +33,11 @@ fsuite is a composable sensor suite, not one sacred path. Use it to build a ment
 - On first contact, load the fsuite mental model when orientation is needed, and use ftree once, intentionally, to establish territory
 - Start with fsearch to narrow candidate files by path or filename
 - Use fcontent only for exact-text confirmation after narrowing; literal search is a strength, not a fallback
-- Prefer -o paths for piping, -o json for programmatic decisions, and pretty for humans
+- When a fsuite wrapper exposes output control, prefer -o paths for piping, -o json for programmatic decisions, and pretty for humans
 - fmap is the bridge in the middle; fmap + fread is the power pair
 - If the active fsuite surface includes fcase, use it to preserve investigation continuity once the seam is known
 - Use fmetrics for observability, not as a reason to spam recon
-- Strong combinations: fsearch -> fmap, fcontent -o paths -> fmap, fsearch -> fcontent -o paths -> fmap
+- Strong combinations: fsearch -> fmap, and fsearch -> fcontent -> fmap when exact-text confirmation is needed before symbol work
 - When you spin up delegated agents or subagents, pass along this same doctrine instead of inventing a different workflow
 
 Browser Tools (Playwright MCP):
