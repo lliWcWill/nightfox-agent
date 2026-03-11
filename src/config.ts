@@ -10,6 +10,8 @@ const defaultEnvPath = path.resolve(__dirname, '..', '.env');
 const envPath = resolveEnvPath(defaultEnvPath);
 loadEnv({ path: envPath, quiet: true });
 
+export const DEFAULT_DASHBOARD_PORT = 3011;
+
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().default(''),
   ALLOWED_USER_IDS: z
@@ -211,7 +213,7 @@ const envSchema = z.object({
     .transform((val) => val.toLowerCase() === 'true'),
   DASHBOARD_PORT: z
     .string()
-    .default('3001')
+    .default(`${DEFAULT_DASHBOARD_PORT}`)
     .transform((val) => parseInt(val, 10)),
   // Factory Droid integration
   DROID_EXEC_PATH: z.string().default('~/.local/bin/droid'),
