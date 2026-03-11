@@ -6,17 +6,16 @@
  *   - DANGEROUS_MODE only: custom function tools for shell/write/edit/patch
  *
  * fsuite doctrine:
- *   - fsuite is a composable sensor suite, not one sacred path
- *   - use fsuite once on first contact when you need a mental model
+ *   - treat the available fsuite tools as a composable sensor suite, not one sacred path
  *   - use ftree once, intentionally, to establish territory
  *   - start with fsearch to narrow candidate files by path or filename
  *   - use fcontent only for exact-text confirmation after narrowing
- *   - prefer -o paths for piping, -o json for programmatic decisions, pretty for humans
+ *   - when a wrapper exposes output control, prefer -o paths for piping, -o json for programmatic decisions, pretty for humans
  *   - fmap is the bridge in the middle; fmap + fread is the power pair
  *   - if fcase is available in the active fsuite surface, use it to preserve continuity once the seam is known
  *   - fmetrics is observability, not a reason to spam recon
  *   - literal search is a strength, not a fallback
- *   - strong combinations: fsearch -> fmap, fcontent -o paths -> fmap, fsearch -> fcontent -o paths -> fmap
+ *   - strong combinations: fsearch -> fmap, and fsearch -> fcontent -> fmap when exact-text confirmation is needed
  *
  * Shell tool uses child_process.exec intentionally - tool input is a full shell
  * command strings that may contain pipes, redirects, etc. This is gated behind
