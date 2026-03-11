@@ -186,6 +186,17 @@ Open your bot in Telegram or Discord.
 ### Dashboard
 
 The Nightfox operator dashboard now lives in this repo under `apps/dashboard`.
+The backend dashboard/API server remains the canonical machine endpoint on `3011`.
+The intended public web shape is:
+
+- `/` -> dashboard UI
+- `/api/*` -> Nightfox backend APIs
+- `/ws` -> Nightfox backend websocket stream
+- `/healthz` -> backend health check
+
+Today, local development still runs the UI and backend as separate processes. In
+production, the dashboard UI should own the public root while the backend keeps
+the API, websocket, and health surfaces.
 
 ```bash
 cd apps/dashboard && npm install
@@ -196,9 +207,12 @@ npm run dashboard:dev
 By default it connects to the Nightfox dashboard backend on:
 
 ```bash
-http://localhost:3001
-ws://localhost:3001/ws
+http://localhost:3011
+ws://localhost:3011/ws
 ```
+
+When explicit public dashboard env vars are absent, production builds default to
+same-origin backend paths: `/api/*` for HTTP and `/ws` for the websocket.
 
 ---
 
