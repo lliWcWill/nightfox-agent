@@ -5,7 +5,20 @@
  *   - Always: fsuite CLI tools (ftree, fsearch, fcontent, fmap, fread, fmetrics) + read_file
  *   - DANGEROUS_MODE only: custom function tools for shell/write/edit/patch
  *
- * Shell tool uses child_process.exec intentionally — tool input is a full shell
+ * fsuite doctrine:
+ *   - fsuite is a composable sensor suite, not one sacred path
+ *   - use fsuite once on first contact when you need a mental model
+ *   - use ftree once, intentionally, to establish territory
+ *   - start with fsearch to narrow candidate files by path or filename
+ *   - use fcontent only for exact-text confirmation after narrowing
+ *   - prefer -o paths for piping, -o json for programmatic decisions, pretty for humans
+ *   - fmap is the bridge in the middle; fmap + fread is the power pair
+ *   - if fcase is available in the active fsuite surface, use it to preserve continuity once the seam is known
+ *   - fmetrics is observability, not a reason to spam recon
+ *   - literal search is a strength, not a fallback
+ *   - strong combinations: fsearch -> fmap, fcontent -o paths -> fmap, fsearch -> fcontent -o paths -> fmap
+ *
+ * Shell tool uses child_process.exec intentionally - tool input is a full shell
  * command strings that may contain pipes, redirects, etc. This is gated behind
  * DANGEROUS_MODE=true, matching Claude provider's bypassPermissions behavior.
  */
@@ -727,7 +740,9 @@ function createDelegateDeepTaskTool() {
   return tool({
     name: 'delegate_deep_task',
     description:
-      'Delegate a deep task to the autonomous background loop. Returns immediately with a jobId.',
+      'Delegate a deep task to the autonomous background loop. Returns immediately with a jobId. ' +
+      'Delegated agents inherit the same fsuite doctrine in compressed form: ftree once when orientation is needed, ' +
+      'start with fsearch, use fcontent only to confirm exact text, then let fmap + fread carry the seam.',
     parameters: z.object({
       task: z.string().describe('Deep task objective to execute in the loop'),
       model: z.string().nullable().optional().describe('Optional model override for the deep loop'),
@@ -958,7 +973,9 @@ function createDelegateCodexHighReviewTool() {
   return tool({
     name: 'delegate_codex_high_review',
     description:
-      'Queue a strict deep review loop using primary model (gpt-5.4) for feature/code review tasks.',
+      'Queue a strict deep review loop using primary model (gpt-5.4) for feature/code review tasks. ' +
+      'Subagents should keep the same fsuite doctrine: orient once, narrow with fsearch, confirm with fcontent, ' +
+      'then use fmap + fread for the deep read.',
     parameters: z.object({
       task: z.string().describe('What should be reviewed or validated'),
       max_iterations: z.number().nullable().optional().describe('Optional max loop iterations (default 24)'),
@@ -1085,8 +1102,9 @@ function createFsuiteOnlyTools(cwd: string) {
     tool({
       name: 'ftree',
       description:
-        'Show a tree view of the project directory structure. ' +
-        'Flags: -L <n> (depth, default 3), -o pretty|paths|json (output format), ' +
+        'Intentional territory scan for first contact. Use ftree once, when appropriate, to establish the project shape, ' +
+        'then switch to narrower fsuite sensors instead of repeating broad recon. ' +
+        'Flags: -L <n> (depth, default 3), -o pretty|paths|json (prefer pretty for humans, paths for piping, json for programmatic decisions), ' +
         '-d (dirs only), -s (show sizes), -r/--recon (per-dir item counts + sizes), ' +
         '--snapshot (combined recon + tree), -I <pattern> (extra ignores), ' +
         '--include <name> (un-ignore a dir), --hide-excluded (suppress excluded summaries). ' +
@@ -1106,17 +1124,20 @@ function createFsuiteOnlyTools(cwd: string) {
     tool({
       name: 'fsearch',
       description:
-        'Fast filename and path search using glob patterns and extensions (NOT content search). ' +
+        'Primary narrowing tool for filenames and paths using glob patterns and extensions, not content search. ' +
+        'Start here to cut the candidate set before content confirmation or deep reads. ' +
+        'Literal path/filename search is a strength, not a fallback. ' +
         "Usage: fsearch <pattern_or_ext> [path]. " +
         "Pattern examples: 'upscale*' (starts-with), '*progress*' (contains), " +
         "'.log' or 'log' (extension search), '*error' (ends-with). " +
-        'Flags: -m <n> (max results), -o pretty|paths|json (output format), -b auto|find|fd (backend).',
+        'Flags: -m <n> (max results), -o pretty|paths|json (prefer paths for piping, json for programmatic decisions, pretty for humans), -b auto|find|fd (backend). ' +
+        'Strong combination: fsearch -> fmap.',
       parameters: z.object({
         query: z.string().describe("Glob pattern or file extension to search for, e.g. '*.ts', 'config*', '.log'"),
         args: z
           .string()
           .nullable()
-          .describe('Additional CLI arguments, e.g. "--output json --max 20 src/"'),
+          .describe('Additional CLI arguments, e.g. "-o json -m 20 src/"'),
       }),
       execute: async (input) => {
         const args = [input.query];
@@ -1129,9 +1150,12 @@ function createFsuiteOnlyTools(cwd: string) {
       name: 'fcontent',
       description:
         'Search file contents for matching text (grep-like). ' +
+        'Use it after fsearch has already narrowed the field, for exact-text confirmation rather than broad discovery. ' +
+        'Literal search is a strength here, not a fallback. ' +
         'The query argument is a search term, NOT a file path. ' +
         'Returns matching lines with context. ' +
-        'Usage: fcontent <query> — searches for the query text across files in the working directory.',
+        'Usage: fcontent <query> - searches for the query text across files in the working directory. ' +
+        'In raw fsuite flows, the strong handoff is fcontent -o paths -> fmap.',
       parameters: z.object({
         query: z.string().describe('Text pattern to search for in file contents'),
       }),
@@ -1143,10 +1167,11 @@ function createFsuiteOnlyTools(cwd: string) {
       tool({
         name: 'fmap',
         description:
-          'Code cartography — extract symbols (functions, classes, types, imports) from source files. ' +
+          'Code cartography - fmap is the bridge in the middle, turning narrowed files into symbol-level territory. ' +
+          'Use it after fsearch or fcontent, then pair it with fread for the deep read. ' +
         'Supports 12 languages (Python, JS, TS, Rust, Go, Java, C, C++, Ruby, Lua, PHP, Bash). ' +
         'Modes: fmap <dir> (scan all files), fmap <file> (single file), piped: fsearch -o paths "*.py" | fmap. ' +
-        'Flags: -o pretty|paths|json, -t <type> (function|class|import|type|export|constant), ' +
+        'Flags: -o pretty|paths|json (prefer paths for piping, json for programmatic decisions, pretty for humans), -t <type> (function|class|import|type|export|constant), ' +
         '-L <lang> (force language), -m <n> (max symbols), -n <n> (max files), --no-imports.',
       parameters: z.object({
         args: z
@@ -1164,7 +1189,7 @@ function createFsuiteOnlyTools(cwd: string) {
         name: 'fread',
         description:
           'Budgeted file reading with line numbers, token estimates, and pipeline integration. ' +
-          'Use this as the primary file-reading tool after ftree/fsearch/fcontent/fmap identify the target. ' +
+          'Use this after ftree/fsearch/fcontent/fmap identify the target; fmap + fread is the power pair once the seam is known. ' +
           'Examples: "--head 80 path/to/file", "-r 120:220 path/to/file", "--around-line 150 -B 8 -A 20 path/to/file", ' +
           '"--around pattern -B 5 -A 10 path/to/file". Supports --from-stdin with paths or unified-diff.',
         parameters: z.object({
@@ -1182,9 +1207,10 @@ function createFsuiteOnlyTools(cwd: string) {
         name: 'fmetrics',
       description:
         'Performance telemetry and analytics for fsuite tools. ' +
+        'This is observability, not a reason to spam recon or repeat discovery you already finished. ' +
         'Subcommands: stats (usage dashboard), history (recent runs), predict <path> (estimate runtimes), ' +
         'profile (machine info), import (ingest telemetry), clean (prune old data). ' +
-        'Flags: -o pretty|json. History: --tool <name>, --project <name>, --limit <n>. ' +
+        'Flags: -o pretty|json (prefer json for programmatic decisions, pretty for humans). History: --tool <name>, --project <name>, --limit <n>. ' +
         'Predict: --tool <name>. Clean: --days <n>, --dry-run.',
       parameters: z.object({
         args: z
